@@ -557,9 +557,9 @@ class ChessAtelier {
     }
 
     if (type === "n") {
-      this.addCylinder(group, 0.15, 0.22, 0.18, 0.66, body);
-      this.addRoundedBox(group, 0.12, 0.43, 0.12, -0.08, 0.93, 0, trim, 0.035, 0, Math.PI / 4);
-      this.addRoundedBox(group, 0.34, 0.12, 0.12, 0.04, 1.1, 0, trim, 0.035, 0, Math.PI / 4);
+      this.addCylinder(group, 0.16, 0.23, 0.2, 0.66, body);
+      this.addTorus(group, 0.2, 0.016, 0.78, trim);
+      this.addKnightHead(group, body, trim, color);
     }
 
     if (type === "b") {
@@ -674,6 +674,96 @@ class ChessAtelier {
     mesh.position.set(x, y, z);
     mesh.scale.set(scaleX, scaleY, scaleZ);
     mesh.rotation.y = Math.PI / 4;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  private addKnightHead(group: THREE.Group, body: THREE.Material, trim: THREE.Material, color: Color) {
+    const profile = new THREE.Shape();
+    profile.moveTo(-0.26, 0.62);
+    profile.bezierCurveTo(-0.34, 0.78, -0.31, 1.02, -0.13, 1.15);
+    profile.bezierCurveTo(-0.06, 1.21, -0.02, 1.3, 0.08, 1.34);
+    profile.bezierCurveTo(0.18, 1.39, 0.31, 1.35, 0.38, 1.24);
+    profile.bezierCurveTo(0.5, 1.2, 0.58, 1.1, 0.55, 1);
+    profile.bezierCurveTo(0.52, 0.9, 0.4, 0.86, 0.28, 0.89);
+    profile.bezierCurveTo(0.14, 0.92, 0.05, 0.81, -0.04, 0.63);
+    profile.lineTo(-0.26, 0.62);
+
+    const depth = 0.28;
+    const geometry = new THREE.ExtrudeGeometry(profile, {
+      depth,
+      bevelEnabled: true,
+      bevelSegments: 3,
+      bevelSize: 0.024,
+      bevelThickness: 0.018,
+      curveSegments: 18,
+    });
+    geometry.translate(0, 0, -depth / 2);
+    const head = new THREE.Mesh(geometry, body);
+    head.castShadow = true;
+    head.receiveShadow = true;
+    group.add(head);
+
+    this.addKnightMane(group, trim);
+    this.addConeAt(group, 0.055, 0.22, 0.04, 1.39, -0.06, trim, -0.18, 0.22, 0.18, 4);
+    this.addConeAt(group, 0.05, 0.2, 0.13, 1.36, 0.08, trim, -0.34, -0.18, 0.18, 4);
+    this.addEllipsoidAt(group, 0.11, 0.06, 0.09, 0.43, 1.02, 0, body);
+    this.addSphereAt(group, 0.025, 0.46, 1.04, 0.145, trim);
+    this.addSphereAt(group, 0.025, 0.46, 1.04, -0.145, trim);
+
+    const eye = color === "w" ? this.blackPieceMaterial : this.whitePieceMaterial;
+    this.addSphereAt(group, 0.03, 0.2, 1.2, 0.15, eye);
+    this.addSphereAt(group, 0.03, 0.2, 1.2, -0.15, eye);
+  }
+
+  private addKnightMane(group: THREE.Group, trim: THREE.Material) {
+    const tufts = [
+      { x: -0.18, y: 1.2, z: 0, rz: -0.55 },
+      { x: -0.23, y: 1.08, z: 0, rz: -0.42 },
+      { x: -0.25, y: 0.95, z: 0, rz: -0.28 },
+      { x: -0.23, y: 0.82, z: 0, rz: -0.18 },
+    ];
+
+    tufts.forEach((tuft) => {
+      this.addRoundedBox(group, 0.08, 0.17, 0.34, tuft.x, tuft.y, tuft.z, trim, 0.024, tuft.rz);
+    });
+  }
+
+  private addEllipsoidAt(
+    group: THREE.Group,
+    radiusX: number,
+    radiusY: number,
+    radiusZ: number,
+    x: number,
+    y: number,
+    z: number,
+    material: THREE.Material,
+  ) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 14), material);
+    mesh.position.set(x, y, z);
+    mesh.scale.set(radiusX, radiusY, radiusZ);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  private addConeAt(
+    group: THREE.Group,
+    radius: number,
+    height: number,
+    x: number,
+    y: number,
+    z: number,
+    material: THREE.Material,
+    rotationZ = 0,
+    rotationY = 0,
+    rotationX = 0,
+    radialSegments = 32,
+  ) {
+    const mesh = new THREE.Mesh(new THREE.ConeGeometry(radius, height, radialSegments), material);
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(rotationX, rotationY, rotationZ);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
