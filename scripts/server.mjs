@@ -9,7 +9,7 @@ import { WebSocketServer } from "ws";
 const rootDir = fileURLToPath(new URL("../", import.meta.url));
 const distDir = join(rootDir, "dist");
 const port = Number(process.env.PORT ?? 5174);
-const host = process.env.HOST ?? "127.0.0.1";
+const host = process.env.HOST ?? "0.0.0.0";
 const production = process.argv.includes("--production") || process.env.NODE_ENV === "production";
 
 const clients = new Map();
