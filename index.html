@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Шахматное ателье</title>
+  </head>
+  <body>
+    <main id="app-shell">
+      <section id="scene" aria-label="3D шахматная доска"></section>
+
+      <header class="topbar" aria-label="Управление партией">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <h1>Шахматное ателье</h1>
+            <p>Матч на двоих</p>
+          </div>
+        </div>
+
+        <div class="turn-cluster">
+          <span id="roleBadge" class="role-badge">Вход</span>
+          <span id="turnBadge" class="turn-badge white">Белые</span>
+          <span id="statusText" class="status-text" aria-live="polite">Ход белых</span>
+        </div>
+
+        <nav class="control-strip" aria-label="Действия в партии">
+          <button id="newGameBtn" type="button" title="Новая партия">Новая</button>
+          <button id="undoBtn" type="button" title="Отменить последний ход">Назад</button>
+          <button id="flipBtn" type="button" title="Повернуть доску">Разворот</button>
+          <button id="playersBtn" type="button" title="Изменить имя игрока">Игроки</button>
+        </nav>
+      </header>
+
+      <aside class="match-panel" aria-label="Детали партии">
+        <section class="panel-section scoreboard" aria-label="Счет">
+          <div class="section-heading">
+            <h2>Счет</h2>
+            <span id="scoreLead">Ровный матч</span>
+          </div>
+          <div class="score-list">
+            <div class="score-row">
+              <span id="whitePlayerName" class="score-name">Белые</span>
+              <strong id="whiteGameScore">0</strong>
+              <span id="whiteMaterial" class="score-material">М: +0</span>
+            </div>
+            <div class="score-row">
+              <span id="blackPlayerName" class="score-name">Черные</span>
+              <strong id="blackGameScore">0</strong>
+              <span id="blackMaterial" class="score-material">М: +0</span>
+            </div>
+            <div class="score-row draws-row">
+              <span class="score-name">Ничьи</span>
+              <strong id="drawGameScore">0</strong>
+              <span class="score-material">Сессия</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel-section leaderboard" aria-label="Лидерборд">
+          <div class="section-heading">
+            <h2>Лидерборд</h2>
+            <span id="leaderboardSync">Локально</span>
+          </div>
+          <ol id="leaderboardList" class="leaderboard-list" aria-label="Сохраненный лидерборд"></ol>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-heading">
+            <h2>Ходы</h2>
+            <span id="moveCount">0</span>
+          </div>
+          <ol id="moveList" class="move-list" aria-label="Список ходов"></ol>
+        </section>
+
+        <section class="panel-section captures">
+          <div class="section-heading">
+            <h2>Взятые</h2>
+          </div>
+          <div class="capture-row">
+            <span id="whiteCaptureLabel">Белые</span>
+            <span id="whiteCaptures" class="capture-pieces"></span>
+          </div>
+          <div class="capture-row">
+            <span id="blackCaptureLabel">Черные</span>
+            <span id="blackCaptures" class="capture-pieces"></span>
+          </div>
+        </section>
+      </aside>
+
+      <div id="playerDialog" class="player-modal" hidden>
+        <form id="playerForm" class="player-card" role="dialog" aria-modal="true" aria-labelledby="playerTitle">
+          <h2 id="playerTitle">Войти в партию</h2>
+          <p id="playerDialogCopy" class="player-copy">Введите имя, чтобы занять свободное место.</p>
+          <div class="player-fields">
+            <label for="playerNameInput">Ваше имя</label>
+            <input id="playerNameInput" name="playerName" maxlength="18" autocomplete="off" placeholder="Имя игрока" />
+          </div>
+          <div class="player-actions">
+            <button id="playerCancelBtn" type="button">Отмена</button>
+            <button id="playerSubmitBtn" type="submit">Войти</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="promotionDialog" class="promotion-modal" hidden>
+        <div class="promotion-card" role="dialog" aria-modal="true" aria-labelledby="promotionTitle">
+          <h2 id="promotionTitle">Превратить пешку</h2>
+          <div class="promotion-options" aria-label="Фигура превращения">
+            <button type="button" data-promotion="q">Ферзь</button>
+            <button type="button" data-promotion="r">Ладья</button>
+            <button type="button" data-promotion="b">Слон</button>
+            <button type="button" data-promotion="n">Конь</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

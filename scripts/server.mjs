@@ -1,0 +1,533 @@
+import { createServer as createHttpServer } from "node:http";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Chess } from "chess.js";
+import { WebSocketServer } from "ws";
+
+const rootDir = fileURLToPath(new URL("../", import.meta.url));
+const distDir = join(rootDir, "dist");
+const port = Number(process.env.PORT ?? 5174);
+const host = process.env.HOST ?? "127.0.0.1";
+const production = process.argv.includes("--production") || process.env.NODE_ENV === "production";
+
+const clients = new Map();
+const seats = { w: null, b: null };
+let game = new Chess();
+let score = { white: 0, black: 0, draws: 0 };
+let recordedResult = null;
+let nextClientId = 1;
+let matchId = randomUUID();
+let gameNumber = 1;
+let currentGameId = `${matchId}:${gameNumber}`;
+let leaderboard = emptyLeaderboard();
+
+const mimeTypes = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".wasm": "application/wasm",
+};
+
+function cleanName(value, fallback) {
+  const clean = String(value ?? "").trim().replace(/\s+/g, " ").slice(0, 18);
+  return clean || fallback;
+}
+
+function cleanId(value) {
+  return String(value ?? "").trim().slice(0, 140);
+}
+
+function playerId(name) {
+  return cleanName(name, "Игрок").toLocaleLowerCase("ru-RU");
+}
+
+function emptyLeaderboard() {
+  return {
+    version: 1,
+    updatedAt: Date.now(),
+    records: {},
+    games: {},
+    removedGames: {},
+  };
+}
+
+function nextGameId() {
+  gameNumber += 1;
+  currentGameId = `${matchId}:${gameNumber}`;
+}
+
+function resetAll() {
+  game = new Chess();
+  score = { white: 0, black: 0, draws: 0 };
+  recordedResult = null;
+  matchId = randomUUID();
+  gameNumber = 1;
+  currentGameId = `${matchId}:${gameNumber}`;
+  leaderboard = emptyLeaderboard();
+  seats.w = null;
+  seats.b = null;
+}
+
+function safeNumber(value) {
+  return Number.isFinite(Number(value)) ? Math.max(0, Math.floor(Number(value))) : 0;
+}
+
+function cleanLeaderboardRecord(raw) {
+  const name = cleanName(raw?.name, "Игрок");
+  const id = playerId(raw?.id ?? name);
+  const wins = safeNumber(raw?.wins);
+  const losses = safeNumber(raw?.losses);
+  const draws = safeNumber(raw?.draws);
+  const games = safeNumber(raw?.games) || wins + losses + draws;
+  const updatedAt = safeNumber(raw?.updatedAt) || Date.now();
+  return { id, name, wins, losses, draws, games, updatedAt };
+}
+
+function cleanLeaderboardGame(raw) {
+  const id = cleanId(raw?.id);
+  if (!id) {
+    return null;
+  }
+  const result = raw?.result === "white" || raw?.result === "black" || raw?.result === "draw" ? raw.result : null;
+  if (!result) {
+    return null;
+  }
+  const whiteId = playerId(raw?.whiteId ?? raw?.whiteName ?? "Белые");
+  const blackId = playerId(raw?.blackId ?? raw?.blackName ?? "Черные");
+  const completedAt = safeNumber(raw?.completedAt) || Date.now();
+  const updatedAt = safeNumber(raw?.updatedAt) || completedAt;
+  return { id, whiteId, blackId, result, completedAt, updatedAt };
+}
+
+function mergeLeaderboard(incoming) {
+  if (!incoming || typeof incoming !== "object") {
+    return false;
+  }
+
+  let changed = false;
+  const incomingRecords = Object.values(incoming.records ?? {}).slice(0, 100);
+  incomingRecords.forEach((rawRecord) => {
+    const record = cleanLeaderboardRecord(rawRecord);
+    const existing = leaderboard.records[record.id];
+    if (!existing || record.updatedAt > existing.updatedAt) {
+      leaderboard.records[record.id] = record;
+      changed = true;
+    }
+  });
+
+  Object.entries(incoming.removedGames ?? {})
+    .slice(0, 400)
+    .forEach(([id, rawRemovedAt]) => {
+      const removedAt = safeNumber(rawRemovedAt) || Date.now();
+      if (!leaderboard.removedGames[id] || removedAt > leaderboard.removedGames[id]) {
+        leaderboard.removedGames[id] = removedAt;
+        delete leaderboard.games[id];
+        changed = true;
+      }
+    });
+
+  const incomingGames = Object.values(incoming.games ?? {}).slice(0, 400);
+  incomingGames.forEach((rawGame) => {
+    const gameRecord = cleanLeaderboardGame(rawGame);
+    if (!gameRecord) {
+      return;
+    }
+    if (leaderboard.removedGames[gameRecord.id] && leaderboard.removedGames[gameRecord.id] >= gameRecord.updatedAt) {
+      return;
+    }
+    const existing = leaderboard.games[gameRecord.id];
+    if (!existing || gameRecord.updatedAt > existing.updatedAt) {
+      leaderboard.games[gameRecord.id] = gameRecord;
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    leaderboard.updatedAt = Math.max(safeNumber(incoming.updatedAt), Date.now());
+  }
+  return changed;
+}
+
+function ensureLeaderboardRecord(name) {
+  const id = playerId(name);
+  const existing = leaderboard.records[id];
+  if (existing) {
+    return existing;
+  }
+  const now = Date.now();
+  const record = { id, name: cleanName(name, "Игрок"), wins: 0, losses: 0, draws: 0, games: 0, updatedAt: now };
+  leaderboard.records[id] = record;
+  return record;
+}
+
+function touchLeaderboardRecord(record, delta) {
+  record.wins = Math.max(0, record.wins + (delta.wins ?? 0));
+  record.losses = Math.max(0, record.losses + (delta.losses ?? 0));
+  record.draws = Math.max(0, record.draws + (delta.draws ?? 0));
+  record.games = Math.max(0, record.wins + record.losses + record.draws);
+  record.updatedAt = Date.now();
+  leaderboard.updatedAt = record.updatedAt;
+}
+
+function recordLeaderboardResult(result) {
+  if (leaderboard.games[currentGameId]) {
+    return;
+  }
+  delete leaderboard.removedGames[currentGameId];
+  const whiteName = seats.w?.name ?? "Белые";
+  const blackName = seats.b?.name ?? "Черные";
+  const white = ensureLeaderboardRecord(whiteName);
+  const black = ensureLeaderboardRecord(blackName);
+  const completedAt = Date.now();
+
+  leaderboard.games[currentGameId] = {
+    id: currentGameId,
+    whiteId: white.id,
+    blackId: black.id,
+    result,
+    completedAt,
+    updatedAt: completedAt,
+  };
+
+  if (result === "white") {
+    touchLeaderboardRecord(white, { wins: 1 });
+    touchLeaderboardRecord(black, { losses: 1 });
+  } else if (result === "black") {
+    touchLeaderboardRecord(white, { losses: 1 });
+    touchLeaderboardRecord(black, { wins: 1 });
+  } else {
+    touchLeaderboardRecord(white, { draws: 1 });
+    touchLeaderboardRecord(black, { draws: 1 });
+  }
+}
+
+function removeLeaderboardGame(gameId) {
+  const gameRecord = leaderboard.games[gameId];
+  if (!gameRecord) {
+    return;
+  }
+
+  const white = leaderboard.records[gameRecord.whiteId];
+  const black = leaderboard.records[gameRecord.blackId];
+  if (gameRecord.result === "white") {
+    if (white) touchLeaderboardRecord(white, { wins: -1 });
+    if (black) touchLeaderboardRecord(black, { losses: -1 });
+  } else if (gameRecord.result === "black") {
+    if (white) touchLeaderboardRecord(white, { losses: -1 });
+    if (black) touchLeaderboardRecord(black, { wins: -1 });
+  } else {
+    if (white) touchLeaderboardRecord(white, { draws: -1 });
+    if (black) touchLeaderboardRecord(black, { draws: -1 });
+  }
+
+  delete leaderboard.games[gameId];
+  leaderboard.removedGames[gameId] = Date.now();
+  leaderboard.updatedAt = Date.now();
+}
+
+function resultForCurrentPosition() {
+  if (game.isCheckmate()) {
+    return game.turn() === "w" ? "black" : "white";
+  }
+  if (game.isStalemate() || game.isDraw()) {
+    return "draw";
+  }
+  return null;
+}
+
+function applyScoreResult(result, delta) {
+  if (result === "white") {
+    score.white = Math.max(0, score.white + delta);
+  } else if (result === "black") {
+    score.black = Math.max(0, score.black + delta);
+  } else if (result === "draw") {
+    score.draws = Math.max(0, score.draws + delta);
+  }
+}
+
+function recordResultIfNeeded() {
+  const result = resultForCurrentPosition();
+  if (result && !recordedResult) {
+    applyScoreResult(result, 1);
+    recordLeaderboardResult(result);
+    recordedResult = result;
+  }
+}
+
+function seatForClientKey(clientKey) {
+  if (seats.w?.clientKey === clientKey) {
+    return "w";
+  }
+  if (seats.b?.clientKey === clientKey) {
+    return "b";
+  }
+  return null;
+}
+
+function roleForClient(client) {
+  return seatForClientKey(client.clientKey) ?? client.role ?? null;
+}
+
+function publicStateFor(client) {
+  const role = roleForClient(client);
+  return {
+    type: "state",
+    clientId: client.id,
+    role,
+    canPlay: role === "w" || role === "b",
+    seats: {
+      w: seats.w ? { name: seats.w.name, connected: seats.w.connected } : null,
+      b: seats.b ? { name: seats.b.name, connected: seats.b.connected } : null,
+    },
+    game: {
+      id: currentGameId,
+      fen: game.fen(),
+      pgn: game.pgn(),
+      turn: game.turn(),
+      gameOver: game.isGameOver(),
+    },
+    names: {
+      w: seats.w?.name ?? "Ждем белых",
+      b: seats.b?.name ?? "Ждем черных",
+    },
+    score,
+    recordedResult,
+    leaderboard,
+    history: game.history({ verbose: true }),
+  };
+}
+
+function send(client, payload) {
+  if (client.ws.readyState === client.ws.OPEN) {
+    client.ws.send(JSON.stringify(payload));
+  }
+}
+
+function broadcast() {
+  clients.forEach((client) => send(client, publicStateFor(client)));
+}
+
+function sendError(client, message) {
+  send(client, { type: "error", message });
+}
+
+function claimSeat(client, name) {
+  const existingRole = seatForClientKey(client.clientKey);
+  if (existingRole) {
+    seats[existingRole] = { ...seats[existingRole], name, connected: true };
+    client.role = existingRole;
+    return;
+  }
+
+  if (!seats.w) {
+    seats.w = { clientKey: client.clientKey, name, connected: true };
+    client.role = "w";
+    return;
+  }
+
+  if (!seats.b) {
+    seats.b = { clientKey: client.clientKey, name, connected: true };
+    client.role = "b";
+    return;
+  }
+
+  client.role = "spectator";
+}
+
+function renameSeat(client, name) {
+  const role = seatForClientKey(client.clientKey);
+  if (!role) {
+    client.name = name;
+    return;
+  }
+  seats[role] = { ...seats[role], name, connected: true };
+}
+
+function handleMessage(client, raw) {
+  let message;
+  try {
+    message = JSON.parse(raw.toString());
+  } catch {
+    sendError(client, "Не удалось прочитать сообщение.");
+    return;
+  }
+
+  if (message.type === "hello") {
+    client.clientKey = cleanName(message.clientKey, client.clientKey);
+    mergeLeaderboard(message.leaderboard);
+    const role = seatForClientKey(client.clientKey);
+    if (role) {
+      seats[role].connected = true;
+      client.role = role;
+    }
+    broadcast();
+    return;
+  }
+
+  if (message.type === "join") {
+    const name = cleanName(message.name, "Игрок");
+    client.clientKey = cleanName(message.clientKey, client.clientKey);
+    client.name = name;
+    mergeLeaderboard(message.leaderboard);
+    claimSeat(client, name);
+    broadcast();
+    return;
+  }
+
+  if (message.type === "rename") {
+    const name = cleanName(message.name, "Игрок");
+    mergeLeaderboard(message.leaderboard);
+    renameSeat(client, name);
+    broadcast();
+    return;
+  }
+
+  if (message.type === "leaderboard") {
+    if (mergeLeaderboard(message.leaderboard)) {
+      broadcast();
+    } else {
+      send(client, publicStateFor(client));
+    }
+    return;
+  }
+
+  if (message.type === "move") {
+    const role = roleForClient(client);
+    if (role !== game.turn()) {
+      sendError(client, role === "spectator" ? "Зрители только смотрят." : "Сейчас не ваш ход.");
+      return;
+    }
+    if (game.isGameOver()) {
+      sendError(client, "Партия уже окончена.");
+      return;
+    }
+    try {
+      game.move({ from: message.from, to: message.to, promotion: message.promotion });
+      recordResultIfNeeded();
+      broadcast();
+    } catch {
+      sendError(client, "Недопустимый ход.");
+    }
+    return;
+  }
+
+  if (message.type === "undo") {
+    const role = roleForClient(client);
+    if (role !== "w" && role !== "b") {
+      sendError(client, "Зрители только смотрят.");
+      return;
+    }
+    if (recordedResult && game.isGameOver()) {
+      applyScoreResult(recordedResult, -1);
+      removeLeaderboardGame(currentGameId);
+      recordedResult = null;
+    }
+    game.undo();
+    broadcast();
+    return;
+  }
+
+  if (message.type === "newGame") {
+    const role = roleForClient(client);
+    if (role !== "w" && role !== "b") {
+      sendError(client, "Зрители только смотрят.");
+      return;
+    }
+    game.reset();
+    recordedResult = null;
+    nextGameId();
+    broadcast();
+  }
+}
+
+async function serveDist(req, res) {
+  const url = new URL(req.url ?? "/", `http://${host}:${port}`);
+  let pathname = decodeURIComponent(url.pathname);
+  if (pathname === "/") {
+    pathname = "/index.html";
+  }
+
+  const candidate = normalize(join(distDir, pathname));
+  const filePath = candidate.startsWith(normalize(distDir)) ? candidate : join(distDir, "index.html");
+
+  try {
+    const body = await readFile(filePath);
+    res.writeHead(200, { "Content-Type": mimeTypes[extname(filePath)] ?? "application/octet-stream" });
+    res.end(body);
+  } catch {
+    const body = await readFile(join(distDir, "index.html"));
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(body);
+  }
+}
+
+const httpServer = createHttpServer();
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (req, socket, head) => {
+  const { pathname } = new URL(req.url ?? "/", `http://${host}:${port}`);
+  if (pathname !== "/game") {
+    return;
+  }
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit("connection", ws, req);
+  });
+});
+
+wss.on("connection", (ws) => {
+  const client = {
+    id: `c${nextClientId++}`,
+    ws,
+    clientKey: `anonymous-${Math.random().toString(36).slice(2)}`,
+    name: "",
+    role: null,
+  };
+  clients.set(client.id, client);
+  send(client, publicStateFor(client));
+
+  ws.on("message", (raw) => handleMessage(client, raw));
+  ws.on("close", () => {
+    clients.delete(client.id);
+    const role = seatForClientKey(client.clientKey);
+    if (role) {
+      seats[role].connected = false;
+    }
+    broadcast();
+  });
+});
+
+if (production) {
+  httpServer.on("request", async (req, res) => {
+    await serveDist(req, res);
+  });
+} else {
+  const { createServer: createViteServer } = await import("vite");
+  const vite = await createViteServer({
+    appType: "spa",
+    server: {
+      hmr: { server: httpServer },
+      middlewareMode: true,
+    },
+  });
+
+  httpServer.on("request", (req, res) => {
+    if (req.method === "POST" && req.url === "/__reset") {
+      resetAll();
+      broadcast();
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    vite.middlewares(req, res);
+  });
+}
+
+httpServer.listen(port, host, () => {
+  console.log(`Chess Atelier running at http://${host}:${port}/`);
+});
