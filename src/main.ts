@@ -680,6 +680,14 @@ class ChessAtelier {
   }
 
   private addKnightHead(group: THREE.Group, body: THREE.Material, trim: THREE.Material, color: Color) {
+    this.addRoundedBox(group, 0.16, 0.42, 0.24, -0.12, 0.84, 0, body, 0.055, -0.28);
+    this.addRoundedBox(group, 0.07, 0.36, 0.28, -0.22, 0.93, 0, trim, 0.024, -0.24);
+
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0.03, 0.15, 0);
+    headGroup.scale.set(0.7, 0.76, 0.8);
+    group.add(headGroup);
+
     const profile = new THREE.Shape();
     profile.moveTo(-0.26, 0.62);
     profile.bezierCurveTo(-0.34, 0.78, -0.31, 1.02, -0.13, 1.15);
@@ -703,18 +711,18 @@ class ChessAtelier {
     const head = new THREE.Mesh(geometry, body);
     head.castShadow = true;
     head.receiveShadow = true;
-    group.add(head);
+    headGroup.add(head);
 
-    this.addKnightMane(group, trim);
-    this.addConeAt(group, 0.055, 0.22, 0.04, 1.39, -0.06, trim, -0.18, 0.22, 0.18, 4);
-    this.addConeAt(group, 0.05, 0.2, 0.13, 1.36, 0.08, trim, -0.34, -0.18, 0.18, 4);
-    this.addEllipsoidAt(group, 0.11, 0.06, 0.09, 0.43, 1.02, 0, body);
-    this.addSphereAt(group, 0.025, 0.46, 1.04, 0.145, trim);
-    this.addSphereAt(group, 0.025, 0.46, 1.04, -0.145, trim);
+    this.addKnightMane(headGroup, trim);
+    this.addConeAt(headGroup, 0.055, 0.22, 0.04, 1.39, -0.06, trim, -0.18, 0.22, 0.18, 4);
+    this.addConeAt(headGroup, 0.05, 0.2, 0.13, 1.36, 0.08, trim, -0.34, -0.18, 0.18, 4);
+    this.addEllipsoidAt(headGroup, 0.11, 0.06, 0.09, 0.43, 1.02, 0, body);
+    this.addSphereAt(headGroup, 0.014, 0.46, 1.04, 0.145, trim);
+    this.addSphereAt(headGroup, 0.014, 0.46, 1.04, -0.145, trim);
 
     const eye = color === "w" ? this.blackPieceMaterial : this.whitePieceMaterial;
-    this.addSphereAt(group, 0.03, 0.2, 1.2, 0.15, eye);
-    this.addSphereAt(group, 0.03, 0.2, 1.2, -0.15, eye);
+    this.addSphereAt(headGroup, 0.016, 0.2, 1.2, 0.15, eye);
+    this.addSphereAt(headGroup, 0.016, 0.2, 1.2, -0.15, eye);
   }
 
   private addKnightMane(group: THREE.Group, trim: THREE.Material) {
