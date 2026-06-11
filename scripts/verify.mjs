@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { WebSocket } from "ws";
 
 const url = process.env.CHESS_URL ?? "http://127.0.0.1:5174";
 const chromePath = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -47,7 +48,7 @@ async function probe(page) {
       turn: document.querySelector("#turnBadge")?.textContent ?? "",
       controls: {
         newDisabled: document.querySelector("#newGameBtn")?.hasAttribute("disabled") ?? null,
-        undoDisabled: document.querySelector("#undoBtn")?.hasAttribute("disabled") ?? null,
+        undoPresent: Boolean(document.querySelector("#undoBtn")),
       },
       score: {
         whiteName: document.querySelector("#whitePlayerName")?.textContent ?? "",
@@ -110,6 +111,35 @@ async function playMove(page, from, to) {
 
 async function waitForSync(...pages) {
   await Promise.all(pages.map((page) => page.waitForTimeout(450)));
+}
+
+async function sendRawGameMessageAs(page, payload) {
+  const clientKey = await page.evaluate(() => localStorage.getItem("chessAtelierClientKey"));
+  const socketUrl = new URL("/game", url);
+  socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
+
+  await new Promise((resolve, reject) => {
+    const ws = new WebSocket(socketUrl);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error(`timed out sending ${payload.type}`));
+    }, 3000);
+
+    ws.on("open", () => {
+      ws.send(JSON.stringify({ type: "hello", clientKey }));
+      ws.send(JSON.stringify({ ...payload, clientKey }));
+      setTimeout(() => {
+        clearTimeout(timer);
+        ws.close();
+        resolve();
+      }, 250);
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
 }
 
 async function openPage(browser, viewport = { width: 1280, height: 720 }, seed = null) {
@@ -194,6 +224,8 @@ try {
   assert(whiteProbe.role === "Белые", "first visitor should become Белые");
   assert(whiteProbe.status === "Ход: Алиса", "White name did not drive the Russian status");
   assert(whiteProbe.score.whiteName === "Алиса", "White scoreboard name is wrong");
+  assert(whiteProbe.controls.newDisabled, "new game should be disabled before the game is over");
+  assert(!whiteProbe.controls.undoPresent, "takeback button should not exist in competitive mode");
   assert(whiteProbe.canvasCount === 1 && whiteProbe.litSamples > 8, "desktop canvas appears blank");
   await white.page.screenshot({ path: fileURLToPath(new URL("chess-russian-desktop.png", artifactsDir)), fullPage: false });
 
@@ -220,7 +252,7 @@ try {
   await join(spectator.page, "София");
   let spectatorProbe = await probe(spectator.page);
   assert(spectatorProbe.role === "Зритель", "third visitor should be a spectator");
-  assert(spectatorProbe.controls.newDisabled && spectatorProbe.controls.undoDisabled, "spectator controls should be disabled");
+  assert(spectatorProbe.controls.newDisabled && !spectatorProbe.controls.undoPresent, "spectator controls should be competitive-safe");
 
   const spectatorFen = spectatorProbe.debug.fen;
   await clickSquare(spectator.page, "f2");
@@ -230,6 +262,12 @@ try {
   assert(spectatorProbe.debug.fen === spectatorFen, "spectator changed the board");
 
   await playMove(white.page, "f2", "f3");
+  const activeFen = (await probe(white.page)).debug.fen;
+  await sendRawGameMessageAs(white.page, { type: "undo" });
+  await sendRawGameMessageAs(white.page, { type: "newGame" });
+  await waitForSync(white.page, black.page, spectator.page);
+  assert((await probe(white.page)).debug.fen === activeFen, "competitive game accepted a takeback or early reset");
+
   await playMove(black.page, "e7", "e5");
   await playMove(white.page, "g2", "g4");
   await playMove(black.page, "d8", "h4");
@@ -244,6 +282,7 @@ try {
   assert(blackProbe.moveList.includes("Фh4#"), "Russian queen notation was not rendered for black checkmate");
   assert(spectatorProbe.status === "Мат. Победитель: Борис", "spectator did not sync black checkmate");
   assert(whiteProbe.debug.leaderboard.records["борис"].wins === 5, "black win should update saved leaderboard");
+  assert(!whiteProbe.controls.newDisabled, "new game should unlock after checkmate");
 
   await white.page.screenshot({
     path: fileURLToPath(new URL("chess-russian-black-mate.png", artifactsDir)),

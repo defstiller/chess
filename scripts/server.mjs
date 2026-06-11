@@ -206,30 +206,6 @@ function recordLeaderboardResult(result) {
   }
 }
 
-function removeLeaderboardGame(gameId) {
-  const gameRecord = leaderboard.games[gameId];
-  if (!gameRecord) {
-    return;
-  }
-
-  const white = leaderboard.records[gameRecord.whiteId];
-  const black = leaderboard.records[gameRecord.blackId];
-  if (gameRecord.result === "white") {
-    if (white) touchLeaderboardRecord(white, { wins: -1 });
-    if (black) touchLeaderboardRecord(black, { losses: -1 });
-  } else if (gameRecord.result === "black") {
-    if (white) touchLeaderboardRecord(white, { losses: -1 });
-    if (black) touchLeaderboardRecord(black, { wins: -1 });
-  } else {
-    if (white) touchLeaderboardRecord(white, { draws: -1 });
-    if (black) touchLeaderboardRecord(black, { draws: -1 });
-  }
-
-  delete leaderboard.games[gameId];
-  leaderboard.removedGames[gameId] = Date.now();
-  leaderboard.updatedAt = Date.now();
-}
-
 function resultForCurrentPosition() {
   if (game.isCheckmate()) {
     return game.turn() === "w" ? "black" : "white";
@@ -417,18 +393,7 @@ function handleMessage(client, raw) {
   }
 
   if (message.type === "undo") {
-    const role = roleForClient(client);
-    if (role !== "w" && role !== "b") {
-      sendError(client, "Зрители только смотрят.");
-      return;
-    }
-    if (recordedResult && game.isGameOver()) {
-      applyScoreResult(recordedResult, -1);
-      removeLeaderboardGame(currentGameId);
-      recordedResult = null;
-    }
-    game.undo();
-    broadcast();
+    sendError(client, "Откат ходов отключен для соревновательной партии.");
     return;
   }
 
@@ -436,6 +401,10 @@ function handleMessage(client, raw) {
     const role = roleForClient(client);
     if (role !== "w" && role !== "b") {
       sendError(client, "Зрители только смотрят.");
+      return;
+    }
+    if (!game.isGameOver()) {
+      sendError(client, "Новая партия доступна после завершения текущей.");
       return;
     }
     game.reset();

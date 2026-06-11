@@ -714,6 +714,10 @@ class ChessAtelier {
     this.renderer.domElement.addEventListener("pointerdown", (event) => this.onPointerDown(event));
 
     document.querySelector<HTMLButtonElement>("#newGameBtn")!.addEventListener("click", () => {
+      if (!this.game.isGameOver()) {
+        this.flashStatus("Новая партия доступна после завершения.", "warning");
+        return;
+      }
       if (this.online) {
         this.sendToServer({ type: "newGame" });
         return;
@@ -724,31 +728,6 @@ class ChessAtelier {
       this.recordedResult = null;
       this.pendingPromotion = null;
       this.advanceLocalGameId();
-      this.hidePromotionDialog();
-      this.rebuildPieces();
-      this.updateHighlights();
-      this.updateHud();
-    });
-
-    document.querySelector<HTMLButtonElement>("#undoBtn")!.addEventListener("click", () => {
-      if (this.online) {
-        this.sendToServer({ type: "undo" });
-        return;
-      }
-
-      if (this.recordedResult && this.game.isGameOver()) {
-        this.applyScoreResult(this.recordedResult, -1);
-        this.removeLeaderboardGame(this.currentGameId);
-        this.recordedResult = null;
-      }
-
-      const undone = this.game.undo();
-      if (!undone) {
-        this.flashStatus("Нечего отменять", "warning");
-        return;
-      }
-      this.selectedSquare = null;
-      this.lastMove = null;
       this.hidePromotionDialog();
       this.rebuildPieces();
       this.updateHighlights();
@@ -1048,8 +1027,7 @@ class ChessAtelier {
 
   private updateControls() {
     const canPlay = !this.online || this.role === "w" || this.role === "b";
-    document.querySelector<HTMLButtonElement>("#newGameBtn")!.disabled = !canPlay;
-    document.querySelector<HTMLButtonElement>("#undoBtn")!.disabled = !canPlay;
+    document.querySelector<HTMLButtonElement>("#newGameBtn")!.disabled = !canPlay || !this.game.isGameOver();
 
     if (!this.online) {
       this.roleBadge.textContent = "Локально";
@@ -1363,33 +1341,6 @@ class ChessAtelier {
       this.touchLeaderboardRecord(black, { draws: 1 });
     }
 
-    this.saveLeaderboard();
-    this.renderLeaderboard();
-    this.publishLeaderboard();
-  }
-
-  private removeLeaderboardGame(gameId: string) {
-    const game = this.leaderboard.games[gameId];
-    if (!game) {
-      return;
-    }
-
-    const white = this.leaderboard.records[game.whiteId];
-    const black = this.leaderboard.records[game.blackId];
-    if (game.result === "white") {
-      if (white) this.touchLeaderboardRecord(white, { wins: -1 });
-      if (black) this.touchLeaderboardRecord(black, { losses: -1 });
-    } else if (game.result === "black") {
-      if (white) this.touchLeaderboardRecord(white, { losses: -1 });
-      if (black) this.touchLeaderboardRecord(black, { wins: -1 });
-    } else {
-      if (white) this.touchLeaderboardRecord(white, { draws: -1 });
-      if (black) this.touchLeaderboardRecord(black, { draws: -1 });
-    }
-
-    delete this.leaderboard.games[gameId];
-    this.leaderboard.removedGames[gameId] = Date.now();
-    this.leaderboard.updatedAt = Date.now();
     this.saveLeaderboard();
     this.renderLeaderboard();
     this.publishLeaderboard();
