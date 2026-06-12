@@ -2,6 +2,8 @@ import { Chess, type Color, type Move, type PieceSymbol, type Square } from "che
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import "./styles.css";
 
 type PromotionPiece = "q" | "r" | "b" | "n";
@@ -143,6 +145,18 @@ type CaptureTrophy = {
   square: Square;
 };
 
+type ModelAsset = {
+  scene: THREE.Object3D;
+  clips: THREE.AnimationClip[];
+};
+
+type ModelFit = {
+  maxWidth: number;
+  maxDepth: number;
+  maxHeight: number;
+  groundY: number;
+};
+
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 const ranks = ["1", "2", "3", "4", "5", "6", "7", "8"] as const;
 
@@ -172,6 +186,25 @@ const pieceGlyphs: Record<PieceColor, Record<PieceSymbol, string>> = {
 const squareTopY = 0.075;
 const leaderboardStorageKey = "chessAtelierLeaderboard";
 const soundStorageKey = "chessAtelierSoundEnabled";
+const assetBaseUrl = import.meta.env.BASE_URL || "/";
+const modelAssetBaseUrl = assetBaseUrl.replace(/\/$/, "");
+const modelCacheKey = "ru-models-1";
+const modelPieceUrls: Record<PieceSymbol, string> = {
+  p: `${modelAssetBaseUrl}/models/custom/ru-peshka.glb?v=${modelCacheKey}`,
+  r: `${modelAssetBaseUrl}/models/custom/ru-ladya.glb?v=${modelCacheKey}`,
+  n: `${modelAssetBaseUrl}/models/custom/ru-kon.glb?v=${modelCacheKey}`,
+  b: `${modelAssetBaseUrl}/models/custom/ru-slon.glb?v=${modelCacheKey}`,
+  q: `${modelAssetBaseUrl}/models/custom/ru-ferz.glb?v=${modelCacheKey}`,
+  k: `${modelAssetBaseUrl}/models/custom/ru-korol.glb?v=${modelCacheKey}`,
+};
+const modelPieceFits: Record<PieceSymbol, ModelFit> = {
+  p: { maxWidth: 0.62, maxDepth: 0.56, maxHeight: 1.05, groundY: 0.25 },
+  r: { maxWidth: 0.94, maxDepth: 0.7, maxHeight: 0.98, groundY: 0.28 },
+  n: { maxWidth: 0.86, maxDepth: 1.02, maxHeight: 1.4, groundY: 0.29 },
+  b: { maxWidth: 0.9, maxDepth: 1.05, maxHeight: 1.26, groundY: 0.27 },
+  q: { maxWidth: 0.98, maxDepth: 0.82, maxHeight: 1.45, groundY: 0.27 },
+  k: { maxWidth: 0.96, maxDepth: 0.78, maxHeight: 1.45, groundY: 0.27 },
+};
 
 type SoundCue = "move" | "capture" | "check" | "mate" | "gameOver" | "illegal" | "start";
 
@@ -328,6 +361,7 @@ class ChessAtelier {
   private readonly pieceGroup = new THREE.Group();
   private readonly trophyGroup = new THREE.Group();
   private readonly sound = new SoundEngine();
+  private readonly modelLoader = new GLTFLoader();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly clock = new THREE.Clock();
@@ -374,6 +408,7 @@ class ChessAtelier {
   private awaitingMoveAck = false;
   private stateRevision = 0;
   private role: PlayerRole = null;
+  private modelAssets: Partial<Record<PieceSymbol, ModelAsset>> = {};
   private serverHistory: Move[] | null = null;
   private displayName = window.localStorage.getItem("chessAtelierDisplayName") ?? "";
   private readonly localMatchId = `${this.clientKey}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
@@ -517,6 +552,7 @@ class ChessAtelier {
     this.updateSoundButton();
     this.updateHud();
     this.installDebugApi();
+    void this.loadModelAssets();
     if (this.serverExpected) {
       this.connectToServer();
     } else {
@@ -1102,7 +1138,160 @@ class ChessAtelier {
     }
   }
 
+  private async loadModelAssets() {
+    if (!this.fullScaleMode) {
+      return;
+    }
+
+    const loadedEntries = await Promise.all(
+      (Object.entries(modelPieceUrls) as Array<[PieceSymbol, string]>).map(async ([type, url]) => {
+        try {
+          const gltf = await this.modelLoader.loadAsync(url);
+          return [type, this.prepareModelAsset(gltf)] as const;
+        } catch (error) {
+          console.warn(`Model for ${type} failed to load; using procedural fallback.`, error);
+          return null;
+        }
+      }),
+    );
+
+    this.modelAssets = { ...this.modelAssets };
+    loadedEntries.forEach((entry) => {
+      if (entry) {
+        this.modelAssets[entry[0]] = entry[1];
+      }
+    });
+
+    if (loadedEntries.some(Boolean)) {
+      this.rebuildPieces();
+      this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
+    }
+  }
+
+  private prepareModelAsset(gltf: GLTF): ModelAsset {
+    gltf.scene.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+    return { scene: gltf.scene, clips: gltf.animations };
+  }
+
+  private createModelPiece(type: PieceSymbol, color: Color) {
+    const asset = this.modelAssets[type];
+    if (!asset) {
+      return null;
+    }
+
+    const group = new THREE.Group();
+    const body = color === "w" ? this.whitePieceMaterial : this.blackPieceMaterial;
+    const trim = color === "w" ? this.whiteTrimMaterial : this.blackTrimMaterial;
+    const baseRadius = 0.39;
+
+    this.addBaseShadow(group, baseRadius + 0.05);
+    this.addCylinder(group, baseRadius * 0.78, baseRadius, 0.12, 0.06, trim);
+    this.addCylinder(group, baseRadius * 0.64, baseRadius * 0.82, 0.13, 0.18, body);
+    this.addTorus(group, baseRadius * 0.72, 0.021, 0.27, trim);
+
+    const model = this.cloneModelAsset(asset);
+    this.styleModelPiece(model, color);
+    model.rotation.y = this.modelPieceRotation(type, color);
+    const fit = modelPieceFits[type];
+    this.fitModelToBox(model, fit.maxWidth, fit.maxDepth, fit.maxHeight, fit.groundY);
+    group.add(model);
+
+    return group;
+  }
+
+  private modelPieceRotation(type: PieceSymbol, color: Color) {
+    if (type === "r") {
+      return color === "w" ? -Math.PI / 2 : Math.PI / 2;
+    }
+    return color === "w" ? Math.PI : 0;
+  }
+
+  private cloneModelAsset(asset: ModelAsset) {
+    const clone = SkeletonUtils.clone(asset.scene);
+    clone.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+        object.userData.keepGeometry = true;
+        object.material = this.cloneModelMaterial(object.material);
+      }
+    });
+    return clone;
+  }
+
+  private cloneModelMaterial(material: THREE.Material | THREE.Material[]) {
+    const cloneOne = (item: THREE.Material) => {
+      const clone = item.clone();
+      const maybeWithMap = clone as THREE.Material & { map?: THREE.Texture };
+      if (maybeWithMap.map) {
+        maybeWithMap.map.userData.sharedModelTexture = true;
+      }
+      return clone;
+    };
+    return Array.isArray(material) ? material.map(cloneOne) : cloneOne(material);
+  }
+
+  private styleModelPiece(model: THREE.Object3D, color: Color) {
+    const clothColor = color === "w" ? 0x1f82c1 : 0x15556a;
+    const plumeColor = color === "w" ? 0x45c7e6 : 0x78f3ff;
+    const armorColor = color === "w" ? 0xb9c1bd : 0x8ea4ad;
+    const horseColor = color === "w" ? 0x3a2519 : 0x2b211c;
+    const generatedColor = color === "w" ? 0xd7cdb4 : 0x17323d;
+
+    model.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) {
+        return;
+      }
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => {
+        if (!(material instanceof THREE.MeshStandardMaterial)) {
+          return;
+        }
+        if (material.name.includes("FactionCloth")) {
+          material.color.setHex(clothColor);
+        } else if (material.name.includes("FactionPlume")) {
+          material.color.setHex(plumeColor);
+        } else if (material.name.includes("KnightArmor")) {
+          material.color.setHex(armorColor);
+        } else if (material.name.includes("HorseLeather")) {
+          material.color.setHex(horseColor);
+        } else if (material.name.includes("Generated")) {
+          material.color.setHex(generatedColor);
+          material.roughness = 0.72;
+          material.metalness = 0.04;
+        }
+        material.needsUpdate = true;
+      });
+    });
+  }
+
+  private fitModelToBox(model: THREE.Object3D, maxWidth: number, maxDepth: number, maxHeight: number, groundY: number) {
+    const bounds = new THREE.Box3().setFromObject(model);
+    const size = bounds.getSize(new THREE.Vector3());
+    const scale = Math.min(maxWidth / size.x, maxDepth / size.z, maxHeight / size.y);
+    model.scale.multiplyScalar(scale);
+    model.updateWorldMatrix(true, true);
+
+    const fitted = new THREE.Box3().setFromObject(model);
+    const center = fitted.getCenter(new THREE.Vector3());
+    model.position.x -= center.x;
+    model.position.z -= center.z;
+    model.position.y += groundY - fitted.min.y;
+  }
+
   private createPiece(type: PieceSymbol, color: Color) {
+    if (this.fullScaleMode) {
+      const modelPiece = this.createModelPiece(type, color);
+      if (modelPiece) {
+        return modelPiece;
+      }
+    }
+
     const group = new THREE.Group();
     const isWhite = color === "w";
     const body = isWhite ? this.whitePieceMaterial : this.blackPieceMaterial;
@@ -2932,7 +3121,9 @@ class ChessAtelier {
       group.remove(child);
       child.traverse((object) => {
         if (object instanceof THREE.Mesh) {
-          object.geometry.dispose();
+          if (!object.userData.keepGeometry) {
+            object.geometry.dispose();
+          }
           this.disposeMaterial(object.material);
         }
         if (object instanceof THREE.Sprite) {
@@ -2949,7 +3140,9 @@ class ChessAtelier {
         return;
       }
       const maybeWithMap = item as THREE.Material & { map?: THREE.Texture };
-      maybeWithMap.map?.dispose();
+      if (maybeWithMap.map && !maybeWithMap.map.userData.sharedModelTexture) {
+        maybeWithMap.map.dispose();
+      }
       item.dispose();
     });
   }
