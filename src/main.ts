@@ -84,6 +84,7 @@ type DebugProbe = {
     clientHeight: number;
   };
   camera: {
+    freeCamera: boolean;
     position: [number, number, number];
     testMode: boolean;
   };
@@ -456,7 +457,7 @@ class ChessAtelier {
     this.rebuildPieces();
     this.bindEvents();
     this.onResize();
-    this.setupCameraTestMode();
+    this.setupCameraControls();
     this.updateSoundButton();
     this.updateHud();
     this.installDebugApi();
@@ -1046,12 +1047,11 @@ class ChessAtelier {
     group.add(mesh);
   }
 
-  private setupCameraTestMode() {
-    if (!this.cameraTestMode) {
-      return;
+  private setupCameraControls() {
+    document.body.classList.add("camera-controls-enabled");
+    if (this.cameraTestMode) {
+      document.body.classList.add("camera-test-mode");
     }
-
-    document.body.classList.add("camera-test-mode");
     this.renderer.domElement.dataset.cameraMode = "orbit";
 
     const controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -1084,7 +1084,7 @@ class ChessAtelier {
       this.boardPointerStart = null;
     });
     this.renderer.domElement.addEventListener("contextmenu", (event) => {
-      if (this.cameraTestMode) {
+      if (this.cameraControls) {
         event.preventDefault();
       }
     });
@@ -1167,6 +1167,8 @@ class ChessAtelier {
       this.camera.position.set(small ? 8.4 : 7.35, small ? 10.8 : 9.55, small ? 12.2 : 9.65);
       this.camera.fov = small ? 48 : 35;
       this.camera.lookAt(0, 0, 0);
+    } else {
+      this.cameraControls.target.copy(this.boardGroup.position);
     }
     this.camera.updateProjectionMatrix();
   }
@@ -1176,7 +1178,7 @@ class ChessAtelier {
       return;
     }
 
-    if (this.cameraTestMode && this.boardPointerStart) {
+    if (this.cameraControls && this.boardPointerStart) {
       const dragDistance = Math.hypot(event.clientX - this.boardPointerStart.x, event.clientY - this.boardPointerStart.y);
       if (dragDistance > 5) {
         this.boardPointerStart.moved = true;
@@ -1185,7 +1187,7 @@ class ChessAtelier {
 
     const square = this.pickSquare(event);
     this.hoverSquare = square;
-    if (this.cameraTestMode) {
+    if (this.cameraControls) {
       this.renderer.domElement.style.cursor = this.boardPointerStart?.moved
         ? "grabbing"
         : square && this.canInteractWithBoard()
@@ -1201,7 +1203,7 @@ class ChessAtelier {
       return;
     }
 
-    if (this.cameraTestMode) {
+    if (this.cameraControls) {
       if (event.button === 0) {
         this.boardPointerStart = {
           pointerId: event.pointerId,
@@ -1226,7 +1228,7 @@ class ChessAtelier {
   }
 
   private onPointerUp(event: PointerEvent) {
-    if (!this.cameraTestMode || !this.boardPointerStart) {
+    if (!this.cameraControls || !this.boardPointerStart) {
       return;
     }
 
@@ -2285,6 +2287,7 @@ class ChessAtelier {
         clientHeight: this.renderer.domElement.clientHeight,
       },
       camera: {
+        freeCamera: Boolean(this.cameraControls),
         position: [this.camera.position.x, this.camera.position.y, this.camera.position.z],
         testMode: this.cameraTestMode,
       },

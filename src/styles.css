@@ -89,11 +89,11 @@ button:focus-visible {
   height: 100%;
 }
 
-.camera-test-mode #scene canvas {
+.camera-controls-enabled #scene canvas {
   cursor: grab;
 }
 
-.camera-test-mode #scene canvas:active {
+.camera-controls-enabled #scene canvas:active {
   cursor: grabbing;
 }
 
