@@ -79,6 +79,14 @@ type ServerStateMessage = {
   };
 };
 
+type ServerHoverMessage = {
+  type: "hover";
+  by: Color;
+  square: Square | null;
+};
+
+type ServerMessage = ServerStateMessage | ServerHoverMessage | { type: "error"; message: string };
+
 type DebugProbe = {
   canvas: {
     width: number;
@@ -107,7 +115,10 @@ type DebugProbe = {
   awaitingMoveAck: boolean;
   stateRevision: number;
   role: PlayerRole;
+  hoverSquare: string | null;
+  lastSentHoverSquare: string | null;
   selectedSquare: string | null;
+  remoteHoverSquare: string | null;
   soundEnabled: boolean;
   status: string;
   playerNames: PlayerNames;
@@ -215,8 +226,8 @@ const modelPieceFits: Record<PieceSymbol, ModelFit> = {
   k: { maxWidth: 0.96, maxDepth: 0.78, maxHeight: 1.45, groundY: 0.27 },
 };
 const decorativeStatueSpecs: DecorativeStatueSpec[] = [
-  { color: "w", piece: "q", x: -11.2, scale: 1.55, z: -5.7, rotation: 0.72 },
-  { color: "b", piece: "k", x: 11.2, scale: 1.55, z: -5.7, rotation: -0.72 },
+  { color: "w", piece: "q", x: -11.2, scale: 1.55, z: -5.7, rotation: -2.04 },
+  { color: "b", piece: "k", x: 11.2, scale: 1.55, z: -5.7, rotation: -1.1 },
 ];
 
 type SoundCue = "move" | "capture" | "check" | "mate" | "gameOver" | "illegal" | "start";
@@ -407,6 +418,10 @@ class ChessAtelier {
   private legalTargets: Square[] = [];
   private pendingPromotion: PendingPromotion | null = null;
   private hoverSquare: Square | null = null;
+  private remoteHoverSquare: Square | null = null;
+  private remoteHoverBy: Color | null = null;
+  private remoteHoverExpiresAt = 0;
+  private lastSentHoverSquare: Square | null = null;
   private lastMove: { from: Square; to: Square } | null = null;
   private readonly sessionScore: SessionScore = { white: 0, black: 0, draws: 0 };
   private readonly playerNames: PlayerNames = { w: "Белые", b: "Черные" };
@@ -1859,6 +1874,11 @@ class ChessAtelier {
     this.renderer.domElement.addEventListener("pointerup", (event) => this.onPointerUp(event));
     this.renderer.domElement.addEventListener("pointercancel", () => {
       this.boardPointerStart = null;
+      this.setHoverSquare(null);
+    });
+    this.renderer.domElement.addEventListener("pointerleave", () => {
+      this.boardPointerStart = null;
+      this.setHoverSquare(null);
     });
     this.renderer.domElement.addEventListener("contextmenu", (event) => {
       if (this.cameraControls) {
@@ -1957,6 +1977,7 @@ class ChessAtelier {
 
   private onPointerMove(event: PointerEvent) {
     if (this.pendingPromotion) {
+      this.setHoverSquare(null);
       return;
     }
 
@@ -1968,7 +1989,8 @@ class ChessAtelier {
     }
 
     const square = this.pickSquare(event);
-    this.hoverSquare = square;
+    const hoverSquare = this.boardPointerStart?.moved ? null : square;
+    this.setHoverSquare(hoverSquare);
     if (this.cameraControls) {
       this.renderer.domElement.style.cursor = this.boardPointerStart?.moved
         ? "grabbing"
@@ -1978,6 +2000,43 @@ class ChessAtelier {
       return;
     }
     this.renderer.domElement.style.cursor = square && this.canInteractWithBoard() ? "pointer" : "default";
+  }
+
+  private setHoverSquare(square: Square | null) {
+    if (this.hoverSquare === square) {
+      return;
+    }
+
+    this.hoverSquare = square;
+    this.sendHoverToServer(square);
+  }
+
+  private ownHoverSquare(square: Square | null) {
+    if (!square || (this.role !== "w" && this.role !== "b")) {
+      return null;
+    }
+    const piece = this.game.get(square);
+    return piece?.color === this.role ? square : null;
+  }
+
+  private sendHoverToServer(square: Square | null) {
+    if (!this.serverExpected || !this.online) {
+      this.lastSentHoverSquare = null;
+      return;
+    }
+
+    const outgoingSquare = this.ownHoverSquare(square);
+    if (outgoingSquare === this.lastSentHoverSquare) {
+      return;
+    }
+
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      this.lastSentHoverSquare = null;
+      return;
+    }
+
+    this.lastSentHoverSquare = outgoingSquare;
+    this.socket.send(JSON.stringify({ type: "hover", square: outgoingSquare, clientKey: this.clientKey }));
   }
 
   private onPointerDown(event: PointerEvent) {
@@ -2137,6 +2196,7 @@ class ChessAtelier {
   }
 
   private commitMove(from: Square, to: Square, promotion?: PromotionPiece) {
+    this.setHoverSquare(null);
     if (this.serverExpected) {
       if (this.awaitingMoveAck) {
         this.flashStatus("Ждем подтверждения хода сервером", "warning");
@@ -2237,7 +2297,7 @@ class ChessAtelier {
       if (this.socket !== socket) {
         return;
       }
-      let message: ServerStateMessage | { type: "error"; message: string };
+      let message: ServerMessage;
       try {
         message = JSON.parse(event.data as string);
       } catch {
@@ -2254,6 +2314,11 @@ class ChessAtelier {
       if (message.type === "state") {
         this.awaitingMoveAck = false;
         this.applyServerState(message);
+        return;
+      }
+
+      if (message.type === "hover") {
+        this.applyRemoteHover(message);
       }
     });
 
@@ -2263,6 +2328,11 @@ class ChessAtelier {
       }
       this.online = false;
       this.awaitingMoveAck = false;
+      this.hoverSquare = null;
+      this.remoteHoverSquare = null;
+      this.remoteHoverBy = null;
+      this.remoteHoverExpiresAt = 0;
+      this.lastSentHoverSquare = null;
       this.role = null;
       this.serverConnection = "reconnecting";
       this.socket = null;
@@ -2307,6 +2377,16 @@ class ChessAtelier {
     return true;
   }
 
+  private applyRemoteHover(message: ServerHoverMessage) {
+    if (message.by === this.role) {
+      return;
+    }
+
+    this.remoteHoverBy = message.by;
+    this.remoteHoverSquare = message.square;
+    this.remoteHoverExpiresAt = message.square ? performance.now() + 3500 : 0;
+  }
+
   private applyServerState(state: ServerStateMessage) {
     this.online = true;
     this.serverConnection = "online";
@@ -2331,6 +2411,9 @@ class ChessAtelier {
     this.playServerStateSound(state);
     this.selectedSquare = null;
     this.legalTargets = [];
+    this.remoteHoverSquare = null;
+    this.remoteHoverBy = null;
+    this.remoteHoverExpiresAt = 0;
     this.pendingPromotion = null;
     this.hidePromotionDialog();
     this.lastMove = this.serverHistory.length
@@ -3253,7 +3336,10 @@ class ChessAtelier {
       awaitingMoveAck: this.awaitingMoveAck,
       stateRevision: this.stateRevision,
       role: this.role,
+      hoverSquare: this.hoverSquare,
+      lastSentHoverSquare: this.lastSentHoverSquare,
       selectedSquare: this.selectedSquare,
+      remoteHoverSquare: this.remoteHoverSquare,
       soundEnabled: this.sound.enabled,
       status: this.statusText.textContent ?? "",
       playerNames: { ...this.playerNames },
@@ -3309,12 +3395,18 @@ class ChessAtelier {
       }
     });
 
+    if (this.remoteHoverSquare && now > this.remoteHoverExpiresAt) {
+      this.remoteHoverSquare = null;
+      this.remoteHoverBy = null;
+      this.remoteHoverExpiresAt = 0;
+    }
+
     this.pieceGroup.children.forEach((piece) => {
       if (this.animateMotion(piece, now)) {
         return;
       }
       const square = piece.userData.square as Square | undefined;
-      if (square && square === this.hoverSquare) {
+      if (square && (square === this.hoverSquare || square === this.remoteHoverSquare)) {
         piece.position.y += (0.16 - piece.position.y) * 0.18;
       } else {
         piece.position.y += (squareTopY - piece.position.y) * 0.18;

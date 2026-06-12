@@ -411,8 +411,31 @@ function send(client, payload) {
   }
 }
 
+function isBoardSquare(value) {
+  return typeof value === "string" && /^[a-h][1-8]$/i.test(value);
+}
+
 function broadcast() {
   clients.forEach((client) => send(client, publicStateFor(client)));
+}
+
+function broadcastHover(sourceClient, square) {
+  const role = roleForClient(sourceClient);
+  if (role !== "w" && role !== "b") {
+    return;
+  }
+
+  let hoverSquare = null;
+  if (isBoardSquare(square)) {
+    const piece = game.get(square);
+    hoverSquare = piece?.color === role ? square : null;
+  }
+
+  clients.forEach((client) => {
+    if (client.id !== sourceClient.id) {
+      send(client, { type: "hover", by: role, square: hoverSquare });
+    }
+  });
 }
 
 function sendError(client, message) {
@@ -504,6 +527,11 @@ function handleMessage(client, raw) {
     return;
   }
 
+  if (message.type === "hover") {
+    broadcastHover(client, message.square);
+    return;
+  }
+
   if (message.type === "move") {
     const role = roleForClient(client);
     if (role !== game.turn()) {
@@ -516,6 +544,7 @@ function handleMessage(client, raw) {
     }
     try {
       game.move({ from: message.from, to: message.to, promotion: message.promotion });
+      broadcastHover(client, null);
       recordResultIfNeeded();
       markStateChanged();
       broadcast();
@@ -543,6 +572,7 @@ function handleMessage(client, raw) {
     game.reset();
     recordedResult = null;
     nextGameId();
+    broadcastHover(client, null);
     markStateChanged();
     broadcast();
   }
@@ -604,6 +634,7 @@ wss.on("connection", (ws) => {
 
   ws.on("message", (raw) => handleMessage(client, raw));
   ws.on("close", () => {
+    broadcastHover(client, null);
     clients.delete(client.id);
     const role = seatForClientKey(client.clientKey);
     if (role) {
