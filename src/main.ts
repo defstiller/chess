@@ -157,6 +157,15 @@ type ModelFit = {
   groundY: number;
 };
 
+type DecorativeStatueSpec = {
+  color: Color;
+  piece: PieceSymbol;
+  rotation: number;
+  scale: number;
+  x: number;
+  z: number;
+};
+
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
 const ranks = ["1", "2", "3", "4", "5", "6", "7", "8"] as const;
 
@@ -199,12 +208,16 @@ const modelPieceUrls: Record<PieceSymbol, string> = {
 };
 const modelPieceFits: Record<PieceSymbol, ModelFit> = {
   p: { maxWidth: 0.62, maxDepth: 0.56, maxHeight: 1.05, groundY: 0.25 },
-  r: { maxWidth: 0.94, maxDepth: 0.7, maxHeight: 0.98, groundY: 0.28 },
+  r: { maxWidth: 0.92, maxDepth: 1.18, maxHeight: 1.08, groundY: 0.28 },
   n: { maxWidth: 0.86, maxDepth: 1.02, maxHeight: 1.4, groundY: 0.29 },
   b: { maxWidth: 0.9, maxDepth: 1.05, maxHeight: 1.26, groundY: 0.27 },
   q: { maxWidth: 0.98, maxDepth: 0.82, maxHeight: 1.45, groundY: 0.27 },
   k: { maxWidth: 0.96, maxDepth: 0.78, maxHeight: 1.45, groundY: 0.27 },
 };
+const decorativeStatueSpecs: DecorativeStatueSpec[] = [
+  { color: "w", piece: "q", x: -11.2, scale: 1.55, z: -5.7, rotation: 0.72 },
+  { color: "b", piece: "k", x: 11.2, scale: 1.55, z: -5.7, rotation: -0.72 },
+];
 
 type SoundCue = "move" | "capture" | "check" | "mate" | "gameOver" | "illegal" | "start";
 
@@ -360,6 +373,7 @@ class ChessAtelier {
   private readonly highlightGroup = new THREE.Group();
   private readonly pieceGroup = new THREE.Group();
   private readonly trophyGroup = new THREE.Group();
+  private readonly decorativeStatueGroup = new THREE.Group();
   private readonly sound = new SoundEngine();
   private readonly modelLoader = new GLTFLoader();
   private readonly raycaster = new THREE.Raycaster();
@@ -475,12 +489,12 @@ class ChessAtelier {
       metalness: 0.16,
     });
     this.blackPieceMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1e282c,
-      roughness: 0.38,
-      metalness: 0.08,
+      color: 0x315a6d,
+      roughness: 0.42,
+      metalness: 0.1,
     });
     this.blackTrimMaterial = new THREE.MeshStandardMaterial({
-      color: 0x70b9ad,
+      color: 0x89d6df,
       roughness: 0.32,
       metalness: 0.2,
     });
@@ -491,7 +505,7 @@ class ChessAtelier {
       side: THREE.DoubleSide,
     });
     this.blackClothMaterial = new THREE.MeshStandardMaterial({
-      color: 0x102e3b,
+      color: 0x2a7587,
       roughness: 0.66,
       metalness: 0.03,
       side: THREE.DoubleSide,
@@ -536,6 +550,7 @@ class ChessAtelier {
     }
 
     this.scene.add(this.boardGroup);
+    this.scene.add(this.decorativeStatueGroup);
     this.boardGroup.add(this.highlightGroup, this.pieceGroup, this.trophyGroup);
     this.scene.background = this.fullScaleMode ? this.createFantasyBackdropTexture() : this.createBackdropTexture();
     this.scene.fog = new THREE.Fog(this.fullScaleMode ? 0x15151d : 0x0f1511, this.fullScaleMode ? 18 : 15, this.fullScaleMode ? 46 : 30);
@@ -872,8 +887,7 @@ class ChessAtelier {
       [10.8, 5.9],
     ].forEach(([x, z], index) => this.createTorch(x, z, index % 2 === 0 ? -1 : 1));
 
-    this.createDecorativeStatue("w", -11.2, 1.55, -5.7, 0.72);
-    this.createDecorativeStatue("b", 11.2, 1.55, -5.7, -0.72);
+    this.rebuildDecorativeStatues();
   }
 
   private createPillar(x: number, z: number, material: THREE.Material) {
@@ -989,11 +1003,22 @@ class ChessAtelier {
     this.scene.add(light);
   }
 
-  private createDecorativeStatue(color: Color, x: number, scale: number, z: number, rotation: number) {
-    const statue = this.createPiece("k", color);
-    statue.position.set(x, -0.34, z);
-    statue.scale.setScalar(scale);
-    statue.rotation.y = rotation;
+  private rebuildDecorativeStatues() {
+    if (!this.fullScaleMode) {
+      return;
+    }
+
+    this.disposeGroupChildren(this.decorativeStatueGroup);
+    decorativeStatueSpecs.forEach((statue) => {
+      this.createDecorativeStatue(statue);
+    });
+  }
+
+  private createDecorativeStatue(spec: DecorativeStatueSpec) {
+    const statue = this.createPiece(spec.piece, spec.color);
+    statue.position.set(spec.x, -0.34, spec.z);
+    statue.scale.setScalar(spec.scale);
+    statue.rotation.y = spec.rotation;
     statue.traverse((object) => {
       object.userData.kind = "statue";
       if (object instanceof THREE.Mesh) {
@@ -1001,7 +1026,7 @@ class ChessAtelier {
         object.castShadow = true;
       }
     });
-    this.scene.add(statue);
+    this.decorativeStatueGroup.add(statue);
   }
 
   private createBoard() {
@@ -1164,6 +1189,7 @@ class ChessAtelier {
 
     if (loadedEntries.some(Boolean)) {
       this.rebuildPieces();
+      this.rebuildDecorativeStatues();
       this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
     }
   }
@@ -1237,11 +1263,11 @@ class ChessAtelier {
   }
 
   private styleModelPiece(model: THREE.Object3D, color: Color) {
-    const clothColor = color === "w" ? 0x1f82c1 : 0x15556a;
-    const plumeColor = color === "w" ? 0x45c7e6 : 0x78f3ff;
-    const armorColor = color === "w" ? 0xb9c1bd : 0x8ea4ad;
-    const horseColor = color === "w" ? 0x3a2519 : 0x2b211c;
-    const generatedColor = color === "w" ? 0xd7cdb4 : 0x17323d;
+    const clothColor = color === "w" ? 0x1f82c1 : 0x2a95ad;
+    const plumeColor = color === "w" ? 0x45c7e6 : 0xb6fbff;
+    const armorColor = color === "w" ? 0xb9c1bd : 0xa9bdc4;
+    const horseColor = color === "w" ? 0x3a2519 : 0x4d3d33;
+    const generatedColor = color === "w" ? 0xd7cdb4 : 0x3b6f82;
 
     model.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) {
@@ -1264,6 +1290,10 @@ class ChessAtelier {
           material.color.setHex(generatedColor);
           material.roughness = 0.72;
           material.metalness = 0.04;
+        }
+        if (color === "b") {
+          material.emissive.setHex(0x071820);
+          material.emissiveIntensity = 0.22;
         }
         material.needsUpdate = true;
       });
