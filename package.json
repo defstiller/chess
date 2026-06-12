@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "main": "app.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "node scripts/server.mjs",
     "start": "node app.js",
