@@ -86,6 +86,9 @@ async function storedLeaderboard(page) {
 }
 
 async function join(page, name) {
+  if (!(await page.locator("#playerDialog:not([hidden])").isVisible().catch(() => false))) {
+    await page.locator("#roleBadge").click();
+  }
   await page.locator("#playerDialog:not([hidden])").waitFor({ state: "visible", timeout: 5000 });
   await page.locator("#playerNameInput").fill(name);
   await page.locator("#playerSubmitBtn").click();

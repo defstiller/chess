@@ -315,12 +315,11 @@ class SoundEngine {
 }
 
 class ChessAtelier {
-  private readonly fullScaleMode =
-    window.location.pathname.startsWith("/full-scale") ||
-    new URLSearchParams(window.location.search).get("mode") === "full-scale";
+  private readonly routeParams = new URLSearchParams(window.location.search);
+  private readonly classicMode = window.location.pathname.startsWith("/classic") || this.routeParams.get("mode") === "classic";
+  private readonly fullScaleMode = !this.classicMode;
   private readonly cameraTestMode =
-    window.location.pathname.startsWith("/camera-test") ||
-    new URLSearchParams(window.location.search).get("mode") === "camera";
+    window.location.pathname.startsWith("/camera-test") || this.routeParams.get("mode") === "camera";
   private readonly game = new Chess();
   private readonly mount: HTMLElement;
   private readonly scene = new THREE.Scene();
@@ -351,6 +350,11 @@ class ChessAtelier {
   private readonly whiteTrimMaterial: THREE.MeshStandardMaterial;
   private readonly blackPieceMaterial: THREE.MeshStandardMaterial;
   private readonly blackTrimMaterial: THREE.MeshStandardMaterial;
+  private readonly whiteClothMaterial: THREE.MeshStandardMaterial;
+  private readonly blackClothMaterial: THREE.MeshStandardMaterial;
+  private readonly leatherMaterial: THREE.MeshStandardMaterial;
+  private readonly goldMaterial: THREE.MeshStandardMaterial;
+  private readonly steelMaterial: THREE.MeshStandardMaterial;
   private selectedSquare: Square | null = null;
   private legalTargets: Square[] = [];
   private pendingPromotion: PendingPromotion | null = null;
@@ -444,6 +448,33 @@ class ChessAtelier {
       color: 0x70b9ad,
       roughness: 0.32,
       metalness: 0.2,
+    });
+    this.whiteClothMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1f82c1,
+      roughness: 0.62,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+    });
+    this.blackClothMaterial = new THREE.MeshStandardMaterial({
+      color: 0x102e3b,
+      roughness: 0.66,
+      metalness: 0.03,
+      side: THREE.DoubleSide,
+    });
+    this.leatherMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3a2418,
+      roughness: 0.64,
+      metalness: 0.04,
+    });
+    this.goldMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd5a348,
+      roughness: 0.32,
+      metalness: 0.42,
+    });
+    this.steelMaterial = new THREE.MeshStandardMaterial({
+      color: 0x9ba4a8,
+      roughness: 0.36,
+      metalness: 0.48,
     });
 
     this.renderer = new THREE.WebGLRenderer({
@@ -1087,11 +1118,14 @@ class ChessAtelier {
     this.addCylinder(group, baseRadius * 0.42, baseRadius * 0.56, 0.32, 0.43, body);
     this.addTorus(group, baseRadius * 0.45, 0.016, 0.58, trim);
 
-    if (type === "p") {
+    if (this.fullScaleMode) {
+      this.addBattleFigure(group, type, color, body, trim);
+    } else {
+      if (type === "p") {
       this.addSphere(group, 0.19, 0.73, body);
-    }
+      }
 
-    if (type === "r") {
+      if (type === "r") {
       this.addCylinder(group, 0.22, 0.24, 0.24, 0.65, body);
       this.addRoundedBox(group, 0.55, 0.14, 0.55, 0, 0.82, 0, trim, 0.045);
       this.addCylinder(group, 0.18, 0.22, 0.1, 0.94, body);
@@ -1099,22 +1133,22 @@ class ChessAtelier {
         const angle = Math.PI / 4 + (i * Math.PI) / 2;
         this.addRoundedBox(group, 0.13, 0.13, 0.13, Math.cos(angle) * 0.2, 1.05, Math.sin(angle) * 0.2, trim, 0.035);
       }
-    }
+      }
 
-    if (type === "n") {
+      if (type === "n") {
       this.addCylinder(group, 0.16, 0.23, 0.2, 0.66, body);
       this.addTorus(group, 0.2, 0.016, 0.78, trim);
       this.addKnightHead(group, body, trim, color);
-    }
+      }
 
-    if (type === "b") {
+      if (type === "b") {
       this.addSphere(group, 0.23, 0.75, body, 0.9, 1.2, 0.9);
       this.addCone(group, 0.16, 0.3, 1.02, body, 32);
       this.addTorus(group, 0.18, 0.015, 0.86, trim);
       this.addSphereAt(group, 0.052, 0, 1.2, 0, trim);
-    }
+      }
 
-    if (type === "q") {
+      if (type === "q") {
       this.addCylinder(group, 0.16, 0.24, 0.22, 0.66, body);
       this.addSphere(group, 0.23, 0.84, body, 1, 0.85, 1);
       this.addTorus(group, 0.23, 0.022, 1.0, trim);
@@ -1123,16 +1157,214 @@ class ChessAtelier {
         this.addSphereAt(group, 0.055, Math.cos(angle) * 0.2, 1.1, Math.sin(angle) * 0.2, trim);
       }
       this.addOctahedron(group, 0.09, 0, 1.19, 0, trim, 0.9, 1.15, 0.9);
-    }
+      }
 
-    if (type === "k") {
+      if (type === "k") {
       this.addCylinder(group, 0.16, 0.24, 0.23, 0.66, body);
       this.addSphere(group, 0.22, 0.84, body, 1, 0.86, 1);
       this.addRoundedBox(group, 0.08, 0.4, 0.08, 0, 1.09, 0, trim, 0.025);
       this.addRoundedBox(group, 0.31, 0.075, 0.075, 0, 1.18, 0, trim, 0.025);
+      }
     }
 
     return group;
+  }
+
+  private addBattleFigure(group: THREE.Group, type: PieceSymbol, color: Color, body: THREE.Material, trim: THREE.Material) {
+    const cloth = color === "w" ? this.whiteClothMaterial : this.blackClothMaterial;
+    const metal = color === "w" ? this.goldMaterial : this.steelMaterial;
+
+    if (type === "p") {
+      this.addInfantryFigure(group, color, body, cloth, metal, 0.86);
+      return;
+    }
+
+    if (type === "n") {
+      this.addMountedKnightFigure(group, color, body, cloth, metal);
+      return;
+    }
+
+    if (type === "r") {
+      this.addSiegeTowerFigure(group, color, body, cloth, metal);
+      return;
+    }
+
+    if (type === "b") {
+      this.addBishopFigure(group, color, body, cloth, metal);
+      return;
+    }
+
+    if (type === "q") {
+      this.addRoyalFigure(group, color, body, cloth, metal, true);
+      return;
+    }
+
+    this.addRoyalFigure(group, color, body, cloth, metal, false);
+  }
+
+  private addInfantryFigure(
+    group: THREE.Group,
+    color: Color,
+    body: THREE.Material,
+    cloth: THREE.Material,
+    metal: THREE.Material,
+    height = 1,
+  ) {
+    const forward = color === "w" ? -1 : 1;
+    const y = 0.58;
+    this.addCylinderAt(group, 0.035, 0.04, 0.28 * height, -0.055, y, 0.02, body, 0, 0, 0, 10);
+    this.addCylinderAt(group, 0.035, 0.04, 0.28 * height, 0.055, y, 0.02, body, 0, 0, 0, 10);
+    this.addEllipsoidAt(group, 0.12, 0.18 * height, 0.085, 0, y + 0.2 * height, 0, cloth);
+    this.addSphereAt(group, 0.075 * height, 0, y + 0.43 * height, 0, body);
+    this.addConeAt(group, 0.09, 0.13, 0, y + 0.51 * height, 0, metal, 0, 0, 0, 12);
+    this.addCylinderAt(group, 0.018, 0.018, 0.72 * height, 0.18, y + 0.26 * height, forward * 0.08, metal, Math.PI / 2.8, 0, 0, 8);
+    this.addConeAt(group, 0.045, 0.14, 0.18, y + 0.58 * height, forward * 0.36, metal, Math.PI / 2, 0, 0, 8);
+    this.addRoundedBox(group, 0.18, 0.24 * height, 0.055, -0.17, y + 0.24 * height, forward * 0.08, metal, 0.03, 0, 0.18 * forward);
+  }
+
+  private addMountedKnightFigure(
+    group: THREE.Group,
+    color: Color,
+    body: THREE.Material,
+    cloth: THREE.Material,
+    metal: THREE.Material,
+  ) {
+    const forward = color === "w" ? -1 : 1;
+    const horseMaterial = color === "w" ? this.leatherMaterial : body;
+    this.addEllipsoidAt(group, 0.22, 0.15, 0.38, 0, 0.78, 0, horseMaterial);
+    [-0.12, 0.12].forEach((x) => {
+      [-0.22, 0.22].forEach((z, legIndex) => {
+        this.addCylinderAt(group, 0.026, 0.034, 0.45, x, 0.5, z, horseMaterial, legIndex % 2 ? 0.13 : -0.13, 0, 0, 8);
+      });
+    });
+    this.addCylinderAt(group, 0.07, 0.09, 0.32, 0, 0.91, forward * 0.34, horseMaterial, forward * 0.72, 0, 0, 12);
+    this.addEllipsoidAt(group, 0.11, 0.08, 0.15, 0, 1.06, forward * 0.52, horseMaterial);
+    this.addConeAt(group, 0.042, 0.16, -0.06, 1.13, forward * 0.55, metal, forward * 0.5, 0, 0, 6);
+    this.addConeAt(group, 0.042, 0.16, 0.06, 1.13, forward * 0.55, metal, forward * 0.5, 0, 0, 6);
+    this.addRoundedBox(group, 0.32, 0.055, 0.32, 0, 0.96, -forward * 0.05, cloth, 0.025);
+    this.addHumanoid(group, color, body, cloth, metal, 0, 0.92, -forward * 0.04, 0.86);
+    this.addCape(group, color, 0, 1.22, -forward * 0.22, 0.36, 0.54, cloth);
+    this.addCylinderAt(group, 0.018, 0.018, 1.1, 0.25, 1.28, forward * 0.14, metal, Math.PI / 2.25, 0, -0.08, 8);
+    this.addConeAt(group, 0.05, 0.18, 0.25, 1.6, forward * 0.62, metal, Math.PI / 2, 0, 0, 8);
+  }
+
+  private addSiegeTowerFigure(
+    group: THREE.Group,
+    color: Color,
+    body: THREE.Material,
+    cloth: THREE.Material,
+    metal: THREE.Material,
+  ) {
+    const forward = color === "w" ? -1 : 1;
+    this.addRoundedBox(group, 0.45, 0.55, 0.45, 0, 0.78, 0, body, 0.05);
+    this.addRoundedBox(group, 0.55, 0.13, 0.55, 0, 1.11, 0, metal, 0.035);
+    for (let i = 0; i < 4; i += 1) {
+      const angle = Math.PI / 4 + (i * Math.PI) / 2;
+      this.addRoundedBox(group, 0.12, 0.13, 0.12, Math.cos(angle) * 0.2, 1.25, Math.sin(angle) * 0.2, metal, 0.025);
+    }
+    this.addCylinderAt(group, 0.025, 0.025, 0.78, 0.22, 1.18, forward * 0.2, metal, 0, 0, 0, 8);
+    this.addBanner(group, color, 0.22, 1.52, forward * 0.2, 0.22, 0.32, cloth);
+  }
+
+  private addBishopFigure(
+    group: THREE.Group,
+    color: Color,
+    body: THREE.Material,
+    cloth: THREE.Material,
+    metal: THREE.Material,
+  ) {
+    const forward = color === "w" ? -1 : 1;
+    this.addCone(group, 0.26, 0.62, 0.82, cloth, 20);
+    this.addSphere(group, 0.13, 1.14, body, 0.9, 1.05, 0.9);
+    this.addConeAt(group, 0.14, 0.22, 0, 1.28, 0, cloth, 0, 0, 0, 20);
+    this.addCylinderAt(group, 0.018, 0.018, 0.88, 0.2, 0.98, forward * 0.08, metal, 0.12, 0, 0, 8);
+    this.addSphereAt(group, 0.07, 0.2, 1.43, forward * 0.08, metal);
+    this.addCape(group, color, 0, 0.98, -forward * 0.13, 0.34, 0.56, cloth);
+  }
+
+  private addRoyalFigure(
+    group: THREE.Group,
+    color: Color,
+    body: THREE.Material,
+    cloth: THREE.Material,
+    metal: THREE.Material,
+    queen: boolean,
+  ) {
+    const forward = color === "w" ? -1 : 1;
+    this.addHumanoid(group, color, body, cloth, metal, 0, 0.64, 0, queen ? 1.12 : 1.06);
+    this.addCape(group, color, 0, 0.98, -forward * 0.16, queen ? 0.5 : 0.42, queen ? 0.72 : 0.64, cloth);
+    const crownY = queen ? 1.28 : 1.23;
+    this.addTorus(group, queen ? 0.12 : 0.105, 0.015, crownY, metal);
+    const spikes = queen ? 6 : 4;
+    for (let i = 0; i < spikes; i += 1) {
+      const angle = (i / spikes) * Math.PI * 2;
+      this.addConeAt(group, 0.03, queen ? 0.14 : 0.11, Math.cos(angle) * 0.11, crownY + 0.08, Math.sin(angle) * 0.11, metal, 0, 0, 0, 6);
+    }
+    if (queen) {
+      this.addBanner(group, color, -0.22, 1.23, forward * 0.08, 0.24, 0.36, cloth);
+    } else {
+      this.addRoundedBox(group, 0.07, 0.4, 0.045, 0.24, 1.02, forward * 0.08, metal, 0.018, -0.4);
+      this.addRoundedBox(group, 0.2, 0.055, 0.04, 0.24, 1.2, forward * 0.08, metal, 0.018, -0.4);
+    }
+  }
+
+  private addHumanoid(
+    group: THREE.Group,
+    color: Color,
+    body: THREE.Material,
+    cloth: THREE.Material,
+    metal: THREE.Material,
+    x: number,
+    y: number,
+    z: number,
+    scale: number,
+  ) {
+    const forward = color === "w" ? -1 : 1;
+    this.addCylinderAt(group, 0.035 * scale, 0.04 * scale, 0.26 * scale, x - 0.045 * scale, y, z, body, 0, 0, 0, 10);
+    this.addCylinderAt(group, 0.035 * scale, 0.04 * scale, 0.26 * scale, x + 0.045 * scale, y, z, body, 0, 0, 0, 10);
+    this.addEllipsoidAt(group, 0.11 * scale, 0.17 * scale, 0.08 * scale, x, y + 0.2 * scale, z, cloth);
+    this.addCylinderAt(group, 0.024 * scale, 0.025 * scale, 0.28 * scale, x - 0.13 * scale, y + 0.22 * scale, z + forward * 0.04, body, 0.45 * forward, 0, 0.35, 8);
+    this.addCylinderAt(group, 0.024 * scale, 0.025 * scale, 0.28 * scale, x + 0.13 * scale, y + 0.22 * scale, z + forward * 0.04, body, 0.45 * forward, 0, -0.35, 8);
+    this.addSphereAt(group, 0.072 * scale, x, y + 0.43 * scale, z, body);
+    this.addConeAt(group, 0.087 * scale, 0.12 * scale, x, y + 0.5 * scale, z, metal, 0, 0, 0, 12);
+  }
+
+  private addCape(
+    group: THREE.Group,
+    color: Color,
+    x: number,
+    y: number,
+    z: number,
+    width: number,
+    height: number,
+    material: THREE.Material,
+  ) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height, 1, 3), material);
+    mesh.position.set(x, y - height * 0.18, z);
+    mesh.rotation.x = 0.06 * (color === "w" ? -1 : 1);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.cape = { baseRotationZ: mesh.rotation.z, phase: Math.random() * Math.PI * 2 };
+    group.add(mesh);
+  }
+
+  private addBanner(
+    group: THREE.Group,
+    color: Color,
+    x: number,
+    y: number,
+    z: number,
+    width: number,
+    height: number,
+    material: THREE.Material,
+  ) {
+    const forward = color === "w" ? -1 : 1;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height, 1, 2), material);
+    mesh.position.set(x, y - height * 0.32, z + forward * 0.03);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.banner = { baseRotationY: mesh.rotation.y, phase: Math.random() * Math.PI * 2 };
+    group.add(mesh);
   }
 
   private addCylinder(
@@ -1145,6 +1377,28 @@ class ChessAtelier {
   ) {
     const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radiusTop, radiusBottom, height, 48), material);
     mesh.position.y = y;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  private addCylinderAt(
+    group: THREE.Group,
+    radiusTop: number,
+    radiusBottom: number,
+    height: number,
+    x: number,
+    y: number,
+    z: number,
+    material: THREE.Material,
+    rotationX = 0,
+    rotationY = 0,
+    rotationZ = 0,
+    radialSegments = 16,
+  ) {
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radiusTop, radiusBottom, height, radialSegments), material);
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(rotationX, rotationY, rotationZ);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
@@ -2706,6 +2960,11 @@ class ChessAtelier {
       material === this.whiteTrimMaterial ||
       material === this.blackPieceMaterial ||
       material === this.blackTrimMaterial ||
+      material === this.whiteClothMaterial ||
+      material === this.blackClothMaterial ||
+      material === this.leatherMaterial ||
+      material === this.goldMaterial ||
+      material === this.steelMaterial ||
       Object.values(this.boardMaterials).some((shared) => shared === material)
     );
   }
@@ -2798,6 +3057,22 @@ class ChessAtelier {
     return true;
   }
 
+  private animateBattleDetails(elapsed: number) {
+    const animateObject = (object: THREE.Object3D) => {
+      const cape = object.userData.cape as { baseRotationZ: number; phase: number } | undefined;
+      if (cape) {
+        object.rotation.z = cape.baseRotationZ + Math.sin(elapsed * 2.8 + cape.phase) * 0.045;
+      }
+      const banner = object.userData.banner as { baseRotationY: number; phase: number } | undefined;
+      if (banner) {
+        object.rotation.y = banner.baseRotationY + Math.sin(elapsed * 3.4 + banner.phase) * 0.08;
+      }
+    };
+
+    this.pieceGroup.traverse(animateObject);
+    this.trophyGroup.traverse(animateObject);
+  }
+
   private animate() {
     this.frame += 1;
     const elapsed = this.clock.getElapsedTime();
@@ -2825,6 +3100,7 @@ class ChessAtelier {
     this.trophyGroup.children.forEach((piece) => {
       this.animateMotion(piece, now);
     });
+    this.animateBattleDetails(elapsed);
     if (this.fullScaleMode) {
       this.scene.traverse((object) => {
         if (object.userData.flame) {
