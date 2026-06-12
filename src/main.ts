@@ -95,6 +95,7 @@ type DebugProbe = {
   leaderboard: LeaderboardState;
   role: PlayerRole;
   selectedSquare: string | null;
+  soundEnabled: boolean;
   status: string;
   playerNames: PlayerNames;
 };
@@ -136,6 +137,148 @@ const pieceGlyphs: Record<PieceColor, Record<PieceSymbol, string>> = {
 
 const squareTopY = 0.075;
 const leaderboardStorageKey = "chessAtelierLeaderboard";
+const soundStorageKey = "chessAtelierSoundEnabled";
+
+type SoundCue = "move" | "capture" | "check" | "mate" | "gameOver" | "illegal" | "start";
+
+class SoundEngine {
+  private context: AudioContext | null = null;
+  private readonly audioContextConstructor =
+    window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  private active = window.localStorage.getItem(soundStorageKey) !== "off";
+
+  get enabled() {
+    return this.active;
+  }
+
+  toggle() {
+    this.active = !this.active;
+    window.localStorage.setItem(soundStorageKey, this.active ? "on" : "off");
+    if (this.active) {
+      void this.unlock();
+    }
+    return this.active;
+  }
+
+  async unlock() {
+    if (!this.active) {
+      return;
+    }
+
+    const context = this.getContext();
+    if (context?.state === "suspended") {
+      await context.resume().catch(() => undefined);
+    }
+  }
+
+  play(cue: SoundCue) {
+    if (!this.active) {
+      return;
+    }
+
+    const context = this.getContext();
+    if (!context) {
+      return;
+    }
+
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
+    switch (cue) {
+      case "move":
+        this.tone(620, 0, 0.055, "triangle", 0.045);
+        this.tone(315, 0.025, 0.05, "sine", 0.025);
+        break;
+      case "capture":
+        this.drop(150, 72, 0, 0.15, "sine", 0.07);
+        this.tone(520, 0.025, 0.045, "triangle", 0.035);
+        break;
+      case "check":
+        this.tone(880, 0, 0.12, "sine", 0.04);
+        this.tone(1320, 0.055, 0.14, "sine", 0.03);
+        break;
+      case "mate":
+        this.tone(392, 0, 0.28, "sine", 0.04);
+        this.tone(494, 0.04, 0.32, "sine", 0.035);
+        this.tone(587, 0.08, 0.36, "triangle", 0.035);
+        break;
+      case "gameOver":
+        this.tone(440, 0, 0.18, "triangle", 0.035);
+        this.tone(330, 0.09, 0.24, "sine", 0.032);
+        break;
+      case "illegal":
+        this.drop(132, 84, 0, 0.12, "sawtooth", 0.035);
+        break;
+      case "start":
+        this.tone(392, 0, 0.085, "triangle", 0.03);
+        this.tone(523, 0.095, 0.1, "triangle", 0.035);
+        break;
+    }
+  }
+
+  private getContext() {
+    if (!this.audioContextConstructor) {
+      return null;
+    }
+    this.context ??= new this.audioContextConstructor();
+    return this.context;
+  }
+
+  private tone(
+    frequency: number,
+    delay: number,
+    duration: number,
+    type: OscillatorType,
+    volume: number,
+  ) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+
+    const start = context.currentTime + delay;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(volume, start + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + duration + 0.03);
+  }
+
+  private drop(
+    from: number,
+    to: number,
+    delay: number,
+    duration: number,
+    type: OscillatorType,
+    volume: number,
+  ) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+
+    const start = context.currentTime + delay;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(from, start);
+    oscillator.frequency.exponentialRampToValueAtTime(to, start + duration);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(volume, start + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + duration + 0.03);
+  }
+}
 
 class ChessAtelier {
   private readonly cameraTestMode =
@@ -147,6 +290,7 @@ class ChessAtelier {
   private readonly boardGroup = new THREE.Group();
   private readonly highlightGroup = new THREE.Group();
   private readonly pieceGroup = new THREE.Group();
+  private readonly sound = new SoundEngine();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly clock = new THREE.Clock();
@@ -191,6 +335,8 @@ class ChessAtelier {
   private targetRotation = 0;
   private frame = 0;
   private boardPointerStart: BoardPointerStart | null = null;
+  private lastSoundedGameId: string | null = null;
+  private lastSoundedMoveCount = 0;
 
   private readonly statusText = document.querySelector<HTMLSpanElement>("#statusText")!;
   private readonly roleBadge = document.querySelector<HTMLSpanElement>("#roleBadge")!;
@@ -215,6 +361,7 @@ class ChessAtelier {
   private readonly playerForm = document.querySelector<HTMLFormElement>("#playerForm")!;
   private readonly playerCancelBtn = document.querySelector<HTMLButtonElement>("#playerCancelBtn")!;
   private readonly playerSubmitBtn = document.querySelector<HTMLButtonElement>("#playerSubmitBtn")!;
+  private readonly soundBtn = document.querySelector<HTMLButtonElement>("#soundBtn")!;
   private readonly playerDialogCopy = document.querySelector<HTMLParagraphElement>("#playerDialogCopy")!;
   private readonly playerNameInput = document.querySelector<HTMLInputElement>("#playerNameInput")!;
   private readonly promotionDialog = document.querySelector<HTMLDivElement>("#promotionDialog")!;
@@ -279,6 +426,7 @@ class ChessAtelier {
     this.bindEvents();
     this.onResize();
     this.setupCameraTestMode();
+    this.updateSoundButton();
     this.updateHud();
     this.installDebugApi();
     if (this.shouldUseServer()) {
@@ -858,6 +1006,7 @@ class ChessAtelier {
 
   private bindEvents() {
     window.addEventListener("resize", () => this.onResize());
+    window.addEventListener("pointerdown", () => void this.sound.unlock(), { once: true, capture: true });
     this.renderer.domElement.addEventListener("pointermove", (event) => this.onPointerMove(event));
     this.renderer.domElement.addEventListener("pointerdown", (event) => this.onPointerDown(event));
     this.renderer.domElement.addEventListener("pointerup", (event) => this.onPointerUp(event));
@@ -889,6 +1038,7 @@ class ChessAtelier {
       this.rebuildPieces();
       this.updateHighlights();
       this.updateHud();
+      this.sound.play("start");
     });
 
     document.querySelector<HTMLButtonElement>("#flipBtn")!.addEventListener("click", () => {
@@ -898,6 +1048,14 @@ class ChessAtelier {
 
     document.querySelector<HTMLButtonElement>("#playersBtn")!.addEventListener("click", () => {
       this.showPlayerDialog(false);
+    });
+
+    this.soundBtn.addEventListener("click", () => {
+      const enabled = this.sound.toggle();
+      this.updateSoundButton();
+      if (enabled) {
+        this.sound.play("start");
+      }
     });
 
     this.playerForm.addEventListener("submit", (event) => {
@@ -1120,6 +1278,7 @@ class ChessAtelier {
       this.rebuildPieces();
       this.updateHighlights();
       this.updateHud();
+      this.playMoveSound(move);
     } catch {
       this.flashStatus("Недопустимый ход", "danger");
     }
@@ -1212,6 +1371,7 @@ class ChessAtelier {
     }
 
     this.game.load(state.game.fen);
+    this.playServerStateSound(state);
     this.selectedSquare = null;
     this.legalTargets = [];
     this.pendingPromotion = null;
@@ -1235,6 +1395,48 @@ class ChessAtelier {
     }
   }
 
+  private playServerStateSound(state: ServerStateMessage) {
+    const gameId = state.game.id ?? this.currentGameId;
+    const moveCount = state.history.length;
+
+    if (!this.lastSoundedGameId) {
+      this.lastSoundedGameId = gameId;
+      this.lastSoundedMoveCount = moveCount;
+      return;
+    }
+
+    if (gameId !== this.lastSoundedGameId) {
+      this.lastSoundedGameId = gameId;
+      this.lastSoundedMoveCount = moveCount;
+      if (moveCount === 0) {
+        this.sound.play("start");
+      }
+      return;
+    }
+
+    if (moveCount > this.lastSoundedMoveCount) {
+      const move = state.history[moveCount - 1];
+      if (move) {
+        this.playMoveSound(move);
+      }
+    }
+    this.lastSoundedMoveCount = moveCount;
+  }
+
+  private playMoveSound(move: Move) {
+    if (this.game.isCheckmate()) {
+      this.sound.play("mate");
+    } else if (this.game.isGameOver()) {
+      this.sound.play("gameOver");
+    } else if (this.game.isCheck()) {
+      this.sound.play("check");
+    } else if (move.captured) {
+      this.sound.play("capture");
+    } else {
+      this.sound.play("move");
+    }
+  }
+
   private updateControls() {
     const canPlay = !this.online || this.role === "w" || this.role === "b";
     document.querySelector<HTMLButtonElement>("#newGameBtn")!.disabled = !canPlay || !this.game.isGameOver();
@@ -1251,6 +1453,14 @@ class ChessAtelier {
       this.roleBadge.textContent = "Войти";
     }
     this.updateLeaderboardSyncLabel();
+    this.updateSoundButton();
+  }
+
+  private updateSoundButton() {
+    this.soundBtn.textContent = this.sound.enabled ? "Звук" : "Тихо";
+    this.soundBtn.classList.toggle("muted", !this.sound.enabled);
+    this.soundBtn.setAttribute("aria-pressed", String(this.sound.enabled));
+    this.soundBtn.title = this.sound.enabled ? "Выключить звук" : "Включить звук";
   }
 
   private showPlayerDialog(initial: boolean) {
@@ -1800,6 +2010,9 @@ class ChessAtelier {
     const previousClass = this.statusText.className;
     this.statusText.textContent = message;
     this.statusText.className = `status-text ${tone}`;
+    if (tone === "danger") {
+      this.sound.play("illegal");
+    }
     window.setTimeout(() => {
       this.statusText.textContent = previous;
       this.statusText.className = previousClass;
@@ -1904,6 +2117,7 @@ class ChessAtelier {
       leaderboard: this.leaderboard,
       role: this.role,
       selectedSquare: this.selectedSquare,
+      soundEnabled: this.sound.enabled,
       status: this.statusText.textContent ?? "",
       playerNames: { ...this.playerNames },
     };

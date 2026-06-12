@@ -236,6 +236,12 @@ h1 {
   padding-inline: 14px;
 }
 
+.sound-toggle.muted {
+  color: rgba(246, 241, 231, 0.62);
+  border-color: rgba(246, 241, 231, 0.12);
+  background: rgba(246, 241, 231, 0.06);
+}
+
 .match-panel {
   position: fixed;
   z-index: 4;
