@@ -90,7 +90,10 @@ type DebugProbe = {
   fen: string;
   frame: number;
   nonTransparentSamples: number;
+  movingPieceCount: number;
+  movingTrophyCount: number;
   pieceCount: number;
+  trophyCount: number;
   score: SessionScore;
   leaderboard: LeaderboardState;
   role: PlayerRole;
@@ -107,6 +110,29 @@ type BoardPointerStart = {
   y: number;
   square: Square | null;
   moved: boolean;
+};
+
+type PieceMoveAnimation = {
+  from: Square;
+  to: Square;
+  capture: boolean;
+};
+
+type SceneMotion = {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  startedAt: number;
+  duration: number;
+  lift: number;
+  spin: number;
+};
+
+type CaptureTrophy = {
+  by: Color;
+  color: Color;
+  key: string;
+  piece: PieceSymbol;
+  square: Square;
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
@@ -290,6 +316,7 @@ class ChessAtelier {
   private readonly boardGroup = new THREE.Group();
   private readonly highlightGroup = new THREE.Group();
   private readonly pieceGroup = new THREE.Group();
+  private readonly trophyGroup = new THREE.Group();
   private readonly sound = new SoundEngine();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
@@ -337,9 +364,12 @@ class ChessAtelier {
   private boardPointerStart: BoardPointerStart | null = null;
   private lastSoundedGameId: string | null = null;
   private lastSoundedMoveCount = 0;
+  private lastAnimatedGameId: string | null = null;
+  private lastAnimatedMoveCount = 0;
+  private lastTrophyCaptureKey: string | null = null;
 
   private readonly statusText = document.querySelector<HTMLSpanElement>("#statusText")!;
-  private readonly roleBadge = document.querySelector<HTMLSpanElement>("#roleBadge")!;
+  private readonly roleBadge = document.querySelector<HTMLButtonElement>("#roleBadge")!;
   private readonly turnBadge = document.querySelector<HTMLSpanElement>("#turnBadge")!;
   private readonly moveList = document.querySelector<HTMLOListElement>("#moveList")!;
   private readonly moveCount = document.querySelector<HTMLSpanElement>("#moveCount")!;
@@ -414,13 +444,14 @@ class ChessAtelier {
     this.camera.lookAt(0, 0, 0);
 
     this.scene.add(this.boardGroup);
-    this.boardGroup.add(this.highlightGroup, this.pieceGroup);
+    this.boardGroup.add(this.highlightGroup, this.pieceGroup, this.trophyGroup);
     this.scene.background = this.createBackdropTexture();
     this.scene.fog = new THREE.Fog(0x0f1511, 15, 30);
 
     this.createLights();
     this.createTableSurface();
     this.createBoard();
+    this.createCaptureRacks();
     this.createCoordinateLabels();
     this.rebuildPieces();
     this.bindEvents();
@@ -634,6 +665,33 @@ class ChessAtelier {
     }
   }
 
+  private createCaptureRacks() {
+    const rackMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3b2a1e,
+      roughness: 0.5,
+      metalness: 0.08,
+    });
+    const trimMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd9914a,
+      roughness: 0.34,
+      metalness: 0.18,
+    });
+
+    [-1, 1].forEach((side) => {
+      const rack = new THREE.Mesh(new RoundedBoxGeometry(0.72, 0.14, 7.7, 4, 0.08), rackMaterial);
+      rack.position.set(side * 5.24, 0.02, 0);
+      rack.castShadow = true;
+      rack.receiveShadow = true;
+      this.boardGroup.add(rack);
+
+      const rail = new THREE.Mesh(new RoundedBoxGeometry(0.12, 0.1, 7.95, 3, 0.04), trimMaterial);
+      rail.position.set(side * 4.82, 0.12, 0);
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      this.boardGroup.add(rail);
+    });
+  }
+
   private createCoordinateLabels() {
     const labelMaterial = (text: string) => {
       const canvas = document.createElement("canvas");
@@ -666,7 +724,7 @@ class ChessAtelier {
     });
   }
 
-  private rebuildPieces() {
+  private rebuildPieces(animation?: PieceMoveAnimation | null) {
     this.pieceMeshes.length = 0;
     this.disposeGroupChildren(this.pieceGroup);
 
@@ -681,6 +739,18 @@ class ChessAtelier {
         const group = this.createPiece(piece.type, piece.color);
         const position = this.squareToLocal(square);
         group.position.set(position.x, squareTopY, position.z);
+        if (animation && square === animation.to) {
+          const from = this.squareToLocal(animation.from);
+          group.position.set(from.x, squareTopY, from.z);
+          group.userData.motion = {
+            from: new THREE.Vector3(from.x, squareTopY, from.z),
+            to: new THREE.Vector3(position.x, squareTopY, position.z),
+            startedAt: performance.now(),
+            duration: animation.capture ? 520 : 420,
+            lift: animation.capture ? 0.54 : 0.36,
+            spin: animation.capture ? 0.28 : 0.12,
+          } satisfies SceneMotion;
+        }
         group.userData.square = square;
         group.userData.kind = "piece";
         group.userData.homeY = squareTopY;
@@ -1033,6 +1103,11 @@ class ChessAtelier {
       this.lastMove = null;
       this.recordedResult = null;
       this.pendingPromotion = null;
+      this.lastTrophyCaptureKey = null;
+      this.lastAnimatedGameId = null;
+      this.lastAnimatedMoveCount = 0;
+      this.lastSoundedGameId = null;
+      this.lastSoundedMoveCount = 0;
       this.advanceLocalGameId();
       this.hidePromotionDialog();
       this.rebuildPieces();
@@ -1047,6 +1122,10 @@ class ChessAtelier {
     });
 
     document.querySelector<HTMLButtonElement>("#playersBtn")!.addEventListener("click", () => {
+      this.showPlayerDialog(false);
+    });
+
+    this.roleBadge.addEventListener("click", () => {
       this.showPlayerDialog(false);
     });
 
@@ -1275,7 +1354,7 @@ class ChessAtelier {
       this.legalTargets = [];
       this.pendingPromotion = null;
       this.hidePromotionDialog();
-      this.rebuildPieces();
+      this.rebuildPieces({ from, to, capture: Boolean(move.captured) });
       this.updateHighlights();
       this.updateHud();
       this.playMoveSound(move);
@@ -1370,6 +1449,7 @@ class ChessAtelier {
       this.mergeLeaderboard(state.leaderboard);
     }
 
+    const moveAnimation = this.getServerMoveAnimation(state);
     this.game.load(state.game.fen);
     this.playServerStateSound(state);
     this.selectedSquare = null;
@@ -1383,7 +1463,7 @@ class ChessAtelier {
         }
       : null;
 
-    this.rebuildPieces();
+    this.rebuildPieces(moveAnimation);
     this.updateHighlights();
     this.updateHud();
     this.updateControls();
@@ -1423,6 +1503,28 @@ class ChessAtelier {
     this.lastSoundedMoveCount = moveCount;
   }
 
+  private getServerMoveAnimation(state: ServerStateMessage): PieceMoveAnimation | null {
+    const gameId = state.game.id ?? this.currentGameId;
+    const moveCount = state.history.length;
+
+    if (!this.lastAnimatedGameId) {
+      this.lastAnimatedGameId = gameId;
+      this.lastAnimatedMoveCount = moveCount;
+      return null;
+    }
+
+    if (gameId !== this.lastAnimatedGameId) {
+      this.lastAnimatedGameId = gameId;
+      this.lastAnimatedMoveCount = moveCount;
+      return null;
+    }
+
+    const move = moveCount > this.lastAnimatedMoveCount ? state.history[moveCount - 1] : null;
+    this.lastAnimatedMoveCount = moveCount;
+
+    return move ? { from: move.from, to: move.to, capture: Boolean(move.captured) } : null;
+  }
+
   private playMoveSound(move: Move) {
     if (this.game.isCheckmate()) {
       this.sound.play("mate");
@@ -1452,6 +1554,8 @@ class ChessAtelier {
     } else {
       this.roleBadge.textContent = "Войти";
     }
+    this.roleBadge.title =
+      this.role === "w" || this.role === "b" ? "Изменить имя игрока" : "Войти в партию";
     this.updateLeaderboardSyncLabel();
     this.updateSoundButton();
   }
@@ -1953,6 +2057,12 @@ class ChessAtelier {
     const captures = this.getCaptures(history);
     this.whiteCaptures.textContent = captures.white.map((piece) => pieceGlyphs.b[piece]).join(" ");
     this.blackCaptures.textContent = captures.black.map((piece) => pieceGlyphs.w[piece]).join(" ");
+
+    const trophies = this.getCaptureTrophies(history);
+    const latest = trophies[trophies.length - 1];
+    const animateKey = latest && latest.key !== this.lastTrophyCaptureKey ? latest.key : null;
+    this.rebuildCaptureTrophies(trophies, animateKey);
+    this.lastTrophyCaptureKey = latest?.key ?? null;
   }
 
   private getCaptures(history: Move[]) {
@@ -1971,6 +2081,62 @@ class ChessAtelier {
     captures.white.sort((a, b) => pieceOrder[a] - pieceOrder[b]);
     captures.black.sort((a, b) => pieceOrder[a] - pieceOrder[b]);
     return captures;
+  }
+
+  private getCaptureTrophies(history: Move[]) {
+    const trophies: CaptureTrophy[] = [];
+    history.forEach((move, index) => {
+      if (!move.captured) {
+        return;
+      }
+      trophies.push({
+        by: move.color,
+        color: move.color === "w" ? "b" : "w",
+        key: `${index}:${move.from}:${move.to}:${move.captured}`,
+        piece: move.captured,
+        square: move.to,
+      });
+    });
+    return trophies;
+  }
+
+  private rebuildCaptureTrophies(trophies: CaptureTrophy[], animateKey: string | null) {
+    this.disposeGroupChildren(this.trophyGroup);
+    const counts: Record<Color, number> = { w: 0, b: 0 };
+    const now = performance.now();
+
+    trophies.forEach((trophy) => {
+      const index = counts[trophy.by];
+      counts[trophy.by] += 1;
+      const target = this.trophyPosition(trophy.by, index);
+      const group = this.createPiece(trophy.piece, trophy.color);
+      group.scale.multiplyScalar(0.46);
+      group.position.copy(target);
+      group.rotation.y = trophy.by === "w" ? -0.2 : 0.2;
+      group.userData.kind = "trophy";
+
+      if (trophy.key === animateKey) {
+        const from = this.squareToLocal(trophy.square);
+        group.position.set(from.x, squareTopY + 0.18, from.z);
+        group.userData.motion = {
+          from: new THREE.Vector3(from.x, squareTopY + 0.18, from.z),
+          to: target,
+          startedAt: now,
+          duration: 680,
+          lift: 0.9,
+          spin: trophy.by === "w" ? 1.1 : -1.1,
+        } satisfies SceneMotion;
+      }
+
+      this.trophyGroup.add(group);
+    });
+  }
+
+  private trophyPosition(by: Color, index: number) {
+    const side = by === "w" ? 1 : -1;
+    const row = index % 8;
+    const column = Math.floor(index / 8);
+    return new THREE.Vector3(side * (5.24 + column * 0.42), 0.17, 3.08 - row * 0.88);
   }
 
   private renderScoreboard(history: Move[]) {
@@ -2059,10 +2225,23 @@ class ChessAtelier {
   private disposeMaterial(material: THREE.Material | THREE.Material[]) {
     const materials = Array.isArray(material) ? material : [material];
     materials.forEach((item) => {
+      if (this.isSharedMaterial(item)) {
+        return;
+      }
       const maybeWithMap = item as THREE.Material & { map?: THREE.Texture };
       maybeWithMap.map?.dispose();
       item.dispose();
     });
+  }
+
+  private isSharedMaterial(material: THREE.Material) {
+    return (
+      material === this.whitePieceMaterial ||
+      material === this.whiteTrimMaterial ||
+      material === this.blackPieceMaterial ||
+      material === this.blackTrimMaterial ||
+      Object.values(this.boardMaterials).some((shared) => shared === material)
+    );
   }
 
   private installDebugApi() {
@@ -2112,7 +2291,10 @@ class ChessAtelier {
       fen: this.game.fen(),
       frame: this.frame,
       nonTransparentSamples,
+      movingPieceCount: this.pieceGroup.children.filter((piece) => Boolean(piece.userData.motion)).length,
+      movingTrophyCount: this.trophyGroup.children.filter((piece) => Boolean(piece.userData.motion)).length,
       pieceCount: this.pieceGroup.children.length,
+      trophyCount: this.trophyGroup.children.length,
       score: { ...this.sessionScore },
       leaderboard: this.leaderboard,
       role: this.role,
@@ -2123,9 +2305,30 @@ class ChessAtelier {
     };
   }
 
+  private animateMotion(object: THREE.Object3D, now: number) {
+    const motion = object.userData.motion as SceneMotion | undefined;
+    if (!motion) {
+      return false;
+    }
+
+    const progress = Math.min(1, Math.max(0, (now - motion.startedAt) / motion.duration));
+    const eased = 1 - (1 - progress) ** 3;
+    object.position.lerpVectors(motion.from, motion.to, eased);
+    object.position.y = THREE.MathUtils.lerp(motion.from.y, motion.to.y, eased) + Math.sin(progress * Math.PI) * motion.lift;
+    object.rotation.y += motion.spin * (1 - progress) * 0.08;
+
+    if (progress >= 1) {
+      object.position.copy(motion.to);
+      delete object.userData.motion;
+    }
+
+    return true;
+  }
+
   private animate() {
     this.frame += 1;
     const elapsed = this.clock.getElapsedTime();
+    const now = performance.now();
 
     this.boardGroup.rotation.y += (this.targetRotation - this.boardGroup.rotation.y) * 0.08;
     this.highlightGroup.children.forEach((child) => {
@@ -2136,12 +2339,18 @@ class ChessAtelier {
     });
 
     this.pieceGroup.children.forEach((piece) => {
+      if (this.animateMotion(piece, now)) {
+        return;
+      }
       const square = piece.userData.square as Square | undefined;
       if (square && square === this.hoverSquare) {
         piece.position.y += (0.16 - piece.position.y) * 0.18;
       } else {
         piece.position.y += (squareTopY - piece.position.y) * 0.18;
       }
+    });
+    this.trophyGroup.children.forEach((piece) => {
+      this.animateMotion(piece, now);
     });
 
     this.cameraControls?.update();
