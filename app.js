@@ -1,3 +1,6 @@
 process.env.NODE_ENV ||= "production";
 
-await import("./scripts/server.mjs");
+import("./scripts/server.mjs").catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

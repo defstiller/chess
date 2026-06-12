@@ -9,10 +9,11 @@ import { WebSocketServer } from "ws";
 const rootDir = fileURLToPath(new URL("../", import.meta.url));
 const distDir = join(rootDir, "dist");
 const production = process.argv.includes("--production") || process.env.NODE_ENV === "production";
-const rawPort = process.env.PORT ?? (production ? "3000" : "5174");
+const configuredPort = process.env.PORT?.trim();
+const rawPort = configuredPort || (production ? "3000" : "5174");
 const parsedPort = Number(rawPort);
-const listenTarget = Number.isFinite(parsedPort) ? parsedPort : rawPort;
-const host = process.env.HOST ?? "0.0.0.0";
+const listenTarget = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : rawPort;
+const host = process.env.HOST?.trim();
 
 const clients = new Map();
 const seats = { w: null, b: null };
@@ -500,10 +501,11 @@ if (production) {
 }
 
 const handleListening = () => {
-  console.log(`Chess Atelier running on ${typeof listenTarget === "number" ? `${host}:${listenTarget}` : listenTarget}`);
+  const address = typeof listenTarget === "number" && host ? `${host}:${listenTarget}` : listenTarget;
+  console.log(`Chess Atelier running on ${address}`);
 };
 
-if (typeof listenTarget === "number") {
+if (typeof listenTarget === "number" && host) {
   httpServer.listen(listenTarget, host, handleListening);
 } else {
   httpServer.listen(listenTarget, handleListening);
