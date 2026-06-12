@@ -59,6 +59,7 @@ type ServerStateMessage = {
   type: "state";
   role: PlayerRole;
   canPlay: boolean;
+  stateRevision?: number;
   names: PlayerNames;
   score: SessionScore;
   recordedResult: ScoreResult | null;
@@ -98,6 +99,11 @@ type DebugProbe = {
   trophyCount: number;
   score: SessionScore;
   leaderboard: LeaderboardState;
+  online: boolean;
+  serverExpected: boolean;
+  serverConnection: string;
+  awaitingMoveAck: boolean;
+  stateRevision: number;
   role: PlayerRole;
   selectedSquare: string | null;
   soundEnabled: boolean;
@@ -354,7 +360,15 @@ class ChessAtelier {
   private readonly playerNames: PlayerNames = { w: "Белые", b: "Черные" };
   private readonly clientKey = this.getClientKey();
   private socket: WebSocket | null = null;
+  private readonly serverExpected = this.shouldUseServer();
   private online = false;
+  private serverConnection: "offline" | "connecting" | "online" | "reconnecting" = this.serverExpected
+    ? "connecting"
+    : "offline";
+  private reconnectTimer: number | null = null;
+  private reconnectDelayMs = 1000;
+  private awaitingMoveAck = false;
+  private stateRevision = 0;
   private role: PlayerRole = null;
   private serverHistory: Move[] | null = null;
   private displayName = window.localStorage.getItem("chessAtelierDisplayName") ?? "";
@@ -372,10 +386,12 @@ class ChessAtelier {
   private lastAnimatedGameId: string | null = null;
   private lastAnimatedMoveCount = 0;
   private lastTrophyCaptureKey: string | null = null;
+  private statusFlashTimer: number | null = null;
 
   private readonly statusText = document.querySelector<HTMLSpanElement>("#statusText")!;
   private readonly roleBadge = document.querySelector<HTMLButtonElement>("#roleBadge")!;
   private readonly turnBadge = document.querySelector<HTMLSpanElement>("#turnBadge")!;
+  private readonly turnCluster = document.querySelector<HTMLElement>(".turn-cluster")!;
   private readonly moveList = document.querySelector<HTMLOListElement>("#moveList")!;
   private readonly moveCount = document.querySelector<HTMLSpanElement>("#moveCount")!;
   private readonly whiteCaptures = document.querySelector<HTMLSpanElement>("#whiteCaptures")!;
@@ -470,7 +486,7 @@ class ChessAtelier {
     this.updateSoundButton();
     this.updateHud();
     this.installDebugApi();
-    if (this.shouldUseServer()) {
+    if (this.serverExpected) {
       this.connectToServer();
     } else {
       this.updateControls();
@@ -1561,12 +1577,17 @@ class ChessAtelier {
     const turn = this.game.turn();
 
     if (!this.canInteractWithBoard()) {
+      this.flashStatus(this.boardBlockedMessage(), "warning");
+      return;
+    }
+
+    if (!this.canInteractWithBoard()) {
       this.flashStatus(this.role === "spectator" ? "Только просмотр" : "Сначала войдите", "warning");
       return;
     }
 
     if (this.online && this.role !== turn) {
-      this.flashStatus(this.turnStatus(turn), "warning");
+      this.flashStatus(this.visibleTurnStatus(turn), "warning");
       return;
     }
 
@@ -1579,7 +1600,7 @@ class ChessAtelier {
       if (piece?.color === turn) {
         this.selectSquare(square);
       } else {
-        this.flashStatus(this.turnStatus(turn), "warning");
+        this.flashStatus(this.visibleTurnStatus(turn), "warning");
       }
       return;
     }
@@ -1621,17 +1642,43 @@ class ChessAtelier {
   }
 
   private canInteractWithBoard() {
+    if (this.serverExpected) {
+      return this.online && !this.awaitingMoveAck && (this.role === "w" || this.role === "b");
+    }
     return !this.online || this.role === "w" || this.role === "b";
   }
 
+  private boardBlockedMessage() {
+    if (this.serverExpected && !this.online) {
+      return "Ждем соединение с сервером";
+    }
+    if (this.awaitingMoveAck) {
+      return "Ждем подтверждения хода сервером";
+    }
+    if (this.role === "spectator") {
+      return "Только просмотр";
+    }
+    return "Сначала войдите";
+  }
+
   private commitMove(from: Square, to: Square, promotion?: PromotionPiece) {
-    if (this.online) {
+    if (this.serverExpected) {
+      if (this.awaitingMoveAck) {
+        this.flashStatus("Ждем подтверждения хода сервером", "warning");
+        return;
+      }
+      const sent = this.sendToServer({ type: "move", from, to, promotion });
+      if (!sent) {
+        return;
+      }
+      this.awaitingMoveAck = true;
       this.selectedSquare = null;
       this.legalTargets = [];
       this.pendingPromotion = null;
       this.hidePromotionDialog();
       this.updateHighlights();
-      this.sendToServer({ type: "move", from, to, promotion });
+      this.updateControls();
+      this.flashStatus("Ход отправлен на сервер", "warning");
       return;
     }
 
@@ -1682,16 +1729,39 @@ class ChessAtelier {
   }
 
   private connectToServer() {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    this.socket = new WebSocket(`${protocol}//${window.location.host}/game`);
+    if (!this.serverExpected) {
+      return;
+    }
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
 
-    this.socket.addEventListener("open", () => {
+    this.serverConnection = this.online ? "online" : this.serverConnection === "offline" ? "connecting" : "reconnecting";
+    this.updateControls();
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${window.location.host}/game`);
+    this.socket = socket;
+
+    socket.addEventListener("open", () => {
+      if (this.socket !== socket) {
+        return;
+      }
       this.online = true;
+      this.serverConnection = "online";
+      this.reconnectDelayMs = 1000;
+      if (this.reconnectTimer) {
+        window.clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
       this.sendToServer({ type: "hello", clientKey: this.clientKey, leaderboard: this.leaderboard });
       this.updateControls();
     });
 
-    this.socket.addEventListener("message", (event) => {
+    socket.addEventListener("message", (event) => {
+      if (this.socket !== socket) {
+        return;
+      }
       let message: ServerStateMessage | { type: "error"; message: string };
       try {
         message = JSON.parse(event.data as string);
@@ -1700,33 +1770,72 @@ class ChessAtelier {
       }
 
       if (message.type === "error") {
+        this.awaitingMoveAck = false;
         this.flashStatus(message.message, "warning");
+        this.updateControls();
         return;
       }
 
       if (message.type === "state") {
+        this.awaitingMoveAck = false;
         this.applyServerState(message);
       }
     });
 
-    this.socket.addEventListener("close", () => {
+    socket.addEventListener("close", () => {
+      if (this.socket !== socket) {
+        return;
+      }
       this.online = false;
+      this.awaitingMoveAck = false;
       this.role = null;
+      this.serverConnection = "reconnecting";
+      this.socket = null;
       this.roleBadge.textContent = "Оффлайн";
       this.updateControls();
+      this.scheduleReconnect();
     });
+
+    socket.addEventListener("error", () => {
+      if (this.socket === socket) {
+        this.serverConnection = "reconnecting";
+        this.updateControls();
+      }
+    });
+  }
+
+  private scheduleReconnect() {
+    if (!this.serverExpected || this.reconnectTimer) {
+      return;
+    }
+
+    const delay = this.reconnectDelayMs;
+    this.reconnectDelayMs = Math.min(8000, this.reconnectDelayMs * 1.5);
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectToServer();
+    }, delay);
   }
 
   private sendToServer(payload: Record<string, unknown>) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      if (this.serverExpected) {
+        this.online = false;
+        this.serverConnection = "reconnecting";
+        this.scheduleReconnect();
+      }
       this.flashStatus("Связь еще не готова", "warning");
-      return;
+      this.updateControls();
+      return false;
     }
     this.socket.send(JSON.stringify({ ...payload, clientKey: this.clientKey }));
+    return true;
   }
 
   private applyServerState(state: ServerStateMessage) {
     this.online = true;
+    this.serverConnection = "online";
+    this.stateRevision = state.stateRevision ?? this.stateRevision;
     this.role = state.role;
     this.serverHistory = state.history;
     this.sessionScore.white = state.score.white;
@@ -1833,8 +1942,11 @@ class ChessAtelier {
   }
 
   private updateControls() {
-    const canPlay = !this.online || this.role === "w" || this.role === "b";
-    document.querySelector<HTMLButtonElement>("#newGameBtn")!.disabled = !canPlay || !this.game.isGameOver();
+    const canPlay = this.serverExpected
+      ? this.online && (this.role === "w" || this.role === "b")
+      : !this.online || this.role === "w" || this.role === "b";
+    document.querySelector<HTMLButtonElement>("#newGameBtn")!.disabled =
+      !canPlay || this.awaitingMoveAck || !this.game.isGameOver();
 
     if (!this.online) {
       this.roleBadge.textContent = "Локально";
@@ -1847,8 +1959,21 @@ class ChessAtelier {
     } else {
       this.roleBadge.textContent = "Войти";
     }
+    if (this.serverExpected && !this.online) {
+      this.roleBadge.textContent = this.serverConnection === "connecting" ? "Подключение" : "Связь";
+    } else if (this.awaitingMoveAck) {
+      this.roleBadge.textContent = "Сервер";
+    }
     this.roleBadge.title =
       this.role === "w" || this.role === "b" ? "Изменить имя игрока" : "Войти в партию";
+    const activeTurn = this.game.turn();
+    const myTurn = this.online && (this.role === "w" || this.role === "b") && this.role === activeTurn && !this.game.isGameOver();
+    const theirTurn =
+      this.online && (this.role === "w" || this.role === "b") && this.role !== activeTurn && !this.game.isGameOver();
+    this.turnCluster.classList.toggle("my-turn", myTurn && !this.awaitingMoveAck);
+    this.turnCluster.classList.toggle("their-turn", theirTurn);
+    this.turnCluster.classList.toggle("waiting-server", this.serverExpected && (!this.online || this.awaitingMoveAck));
+    document.body.classList.toggle("my-turn-active", myTurn && !this.awaitingMoveAck);
     this.updateLeaderboardSyncLabel();
     this.updateSoundButton();
   }
@@ -2261,7 +2386,14 @@ class ChessAtelier {
     this.turnBadge.classList.toggle("black", turn === "b");
 
     this.statusText.className = "status-text";
-    if (this.game.isCheckmate()) {
+    if (this.serverExpected && !this.online) {
+      this.statusText.textContent =
+        this.serverConnection === "connecting" ? "Подключение к серверу..." : "Связь потеряна. Переподключение...";
+      this.statusText.classList.add("warning");
+    } else if (this.awaitingMoveAck) {
+      this.statusText.textContent = "Сохраняем ход на сервере...";
+      this.statusText.classList.add("warning");
+    } else if (this.game.isCheckmate()) {
       const winner = turn === "w" ? "b" : "w";
       this.statusText.textContent = `Мат. Победитель: ${this.playerName(winner)}`;
       this.statusText.classList.add("danger");
@@ -2272,10 +2404,14 @@ class ChessAtelier {
       this.statusText.textContent = "Ничья";
       this.statusText.classList.add("warning");
     } else if (this.game.inCheck()) {
-      this.statusText.textContent = this.turnStatus(turn, " - шах");
+      this.statusText.textContent = this.visibleTurnStatus(turn, " - шах");
       this.statusText.classList.add("warning");
     } else {
-      this.statusText.textContent = this.turnStatus(turn);
+      this.statusText.textContent = this.visibleTurnStatus(turn);
+      const tone = this.turnTone(turn);
+      if (tone) {
+        this.statusText.classList.add(tone);
+      }
     }
 
     this.renderMoveList(history);
@@ -2464,17 +2600,48 @@ class ChessAtelier {
     return this.isWaitingSeatName(name) ? `${name}${suffix}` : `Ход: ${name}${suffix}`;
   }
 
+  private visibleTurnStatus(color: Color, suffix = "") {
+    const name = this.playerName(color);
+    if (this.isWaitingSeatName(name)) {
+      return `${name}${suffix}`;
+    }
+    if (this.online && this.role === color) {
+      return `ВАШ ХОД: ${name}${suffix}`;
+    }
+    if (this.online && (this.role === "w" || this.role === "b")) {
+      return `Ход соперника: ${name}${suffix}`;
+    }
+    if (this.online && this.role === "spectator") {
+      return `Сейчас ходит: ${name}${suffix}`;
+    }
+    return `Ход: ${name}${suffix}`;
+  }
+
+  private turnTone(color: Color) {
+    if (!this.online || this.game.isGameOver()) {
+      return "";
+    }
+    if (this.role === color) {
+      return "my-turn";
+    }
+    if (this.role === "w" || this.role === "b") {
+      return "their-turn";
+    }
+    return "";
+  }
+
   private flashStatus(message: string, tone: "warning" | "danger") {
-    const previous = this.statusText.textContent ?? "";
-    const previousClass = this.statusText.className;
+    if (this.statusFlashTimer) {
+      window.clearTimeout(this.statusFlashTimer);
+    }
     this.statusText.textContent = message;
     this.statusText.className = `status-text ${tone}`;
     if (tone === "danger") {
       this.sound.play("illegal");
     }
-    window.setTimeout(() => {
-      this.statusText.textContent = previous;
-      this.statusText.className = previousClass;
+    this.statusFlashTimer = window.setTimeout(() => {
+      this.statusFlashTimer = null;
+      this.updateHud();
     }, 900);
   }
 
@@ -2592,6 +2759,11 @@ class ChessAtelier {
       trophyCount: this.trophyGroup.children.length,
       score: { ...this.sessionScore },
       leaderboard: this.leaderboard,
+      online: this.online,
+      serverExpected: this.serverExpected,
+      serverConnection: this.serverConnection,
+      awaitingMoveAck: this.awaitingMoveAck,
+      stateRevision: this.stateRevision,
       role: this.role,
       selectedSquare: this.selectedSquare,
       soundEnabled: this.sound.enabled,

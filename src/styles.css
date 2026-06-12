@@ -232,12 +232,54 @@ h1 {
   text-align: left;
 }
 
+.turn-cluster.my-turn {
+  border-color: rgba(91, 198, 164, 0.78);
+  background: rgba(16, 42, 34, 0.88);
+  box-shadow:
+    0 0 0 1px rgba(91, 198, 164, 0.2),
+    0 0 32px rgba(91, 198, 164, 0.34),
+    var(--shadow);
+}
+
+.turn-cluster.their-turn {
+  border-color: rgba(217, 145, 74, 0.38);
+}
+
+.turn-cluster.waiting-server {
+  border-color: rgba(255, 217, 140, 0.45);
+  background: rgba(38, 30, 18, 0.82);
+}
+
+.turn-cluster.my-turn .turn-badge {
+  animation: turnPulse 1.25s ease-in-out infinite;
+}
+
+.status-text.my-turn {
+  color: #8ff0c8;
+  text-shadow: 0 0 18px rgba(91, 198, 164, 0.44);
+}
+
+.status-text.their-turn {
+  color: #f4d8a5;
+}
+
 .status-text.warning {
   color: #ffd98c;
 }
 
 .status-text.danger {
   color: #ff9a8e;
+}
+
+@keyframes turnPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(91, 198, 164, 0);
+  }
+
+  50% {
+    box-shadow: 0 0 18px rgba(91, 198, 164, 0.46);
+  }
 }
 
 .control-strip {

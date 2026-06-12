@@ -1,6 +1,7 @@
 node_modules/
 dist/
 artifacts/
+data/
 .env
 .env.*
 npm-debug.log*

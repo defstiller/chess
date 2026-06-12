@@ -1,13 +1,15 @@
 import { createServer as createHttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Chess } from "chess.js";
 import { WebSocketServer } from "ws";
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url));
 const distDir = join(rootDir, "dist");
+const stateFile = process.env.CHESS_STATE_FILE?.trim() || join(rootDir, "data", "game-state.json");
 const production = process.argv.includes("--production") || process.env.NODE_ENV === "production";
 const configuredPort = process.env.PORT?.trim();
 const rawPort = configuredPort || (production ? "3000" : "5174");
@@ -25,6 +27,7 @@ let matchId = randomUUID();
 let gameNumber = 1;
 let currentGameId = `${matchId}:${gameNumber}`;
 let leaderboard = emptyLeaderboard();
+let stateRevision = 0;
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -74,10 +77,34 @@ function resetAll() {
   leaderboard = emptyLeaderboard();
   seats.w = null;
   seats.b = null;
+  markStateChanged();
 }
 
 function safeNumber(value) {
   return Number.isFinite(Number(value)) ? Math.max(0, Math.floor(Number(value))) : 0;
+}
+
+function cleanScore(raw) {
+  return {
+    white: safeNumber(raw?.white),
+    black: safeNumber(raw?.black),
+    draws: safeNumber(raw?.draws),
+  };
+}
+
+function cleanResult(raw) {
+  return raw === "white" || raw === "black" || raw === "draw" ? raw : null;
+}
+
+function cleanSeat(raw) {
+  if (!raw || typeof raw !== "object" || !raw.clientKey) {
+    return null;
+  }
+  return {
+    clientKey: cleanName(raw.clientKey, ""),
+    name: cleanName(raw.name, "Игрок"),
+    connected: false,
+  };
 }
 
 function cleanLeaderboardRecord(raw) {
@@ -154,6 +181,101 @@ function mergeLeaderboard(incoming) {
     leaderboard.updatedAt = Math.max(safeNumber(incoming.updatedAt), Date.now());
   }
   return changed;
+}
+
+function exportedMoves() {
+  return game.history({ verbose: true }).map((move) => ({
+    from: move.from,
+    to: move.to,
+    promotion: move.promotion,
+  }));
+}
+
+function publicSeatForSave(seat) {
+  return seat ? { clientKey: seat.clientKey, name: seat.name } : null;
+}
+
+function serializedState() {
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    stateRevision,
+    matchId,
+    gameNumber,
+    currentGameId,
+    fen: game.fen(),
+    moves: exportedMoves(),
+    score,
+    recordedResult,
+    leaderboard,
+    seats: {
+      w: publicSeatForSave(seats.w),
+      b: publicSeatForSave(seats.b),
+    },
+  };
+}
+
+function persistState() {
+  try {
+    mkdirSync(dirname(stateFile), { recursive: true });
+    const tempFile = `${stateFile}.${process.pid}.tmp`;
+    writeFileSync(tempFile, JSON.stringify(serializedState(), null, 2), "utf8");
+    renameSync(tempFile, stateFile);
+  } catch (error) {
+    console.warn(`Could not save chess state: ${error.message}`);
+  }
+}
+
+function markStateChanged() {
+  stateRevision += 1;
+  persistState();
+}
+
+function restoreGame(raw) {
+  const restoredGame = new Chess();
+  const moves = Array.isArray(raw?.moves) ? raw.moves : [];
+
+  if (moves.length > 0) {
+    for (const rawMove of moves) {
+      const from = cleanId(rawMove?.from);
+      const to = cleanId(rawMove?.to);
+      const promotion = ["q", "r", "b", "n"].includes(rawMove?.promotion) ? rawMove.promotion : undefined;
+      restoredGame.move({ from, to, promotion });
+    }
+    game = restoredGame;
+    return;
+  }
+
+  if (typeof raw?.fen === "string" && raw.fen.trim()) {
+    restoredGame.load(raw.fen);
+    game = restoredGame;
+  }
+}
+
+function restorePersistedState() {
+  try {
+    const raw = JSON.parse(readFileSync(stateFile, "utf8"));
+    if (!raw || raw.version !== 1) {
+      return;
+    }
+
+    matchId = cleanId(raw.matchId) || randomUUID();
+    gameNumber = safeNumber(raw.gameNumber) || 1;
+    currentGameId = cleanId(raw.currentGameId) || `${matchId}:${gameNumber}`;
+    score = cleanScore(raw.score);
+    recordedResult = cleanResult(raw.recordedResult);
+    leaderboard = emptyLeaderboard();
+    mergeLeaderboard(raw.leaderboard);
+    seats.w = cleanSeat(raw.seats?.w);
+    seats.b = cleanSeat(raw.seats?.b);
+    restoreGame(raw);
+    stateRevision = safeNumber(raw.stateRevision);
+    console.log(`Loaded chess state from ${stateFile}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.warn(`Could not load chess state: ${error.message}`);
+    }
+  }
 }
 
 function ensureLeaderboardRecord(name) {
@@ -259,6 +381,7 @@ function publicStateFor(client) {
     clientId: client.id,
     role,
     canPlay: role === "w" || role === "b",
+    stateRevision,
     seats: {
       w: seats.w ? { name: seats.w.name, connected: seats.w.connected } : null,
       b: seats.b ? { name: seats.b.name, connected: seats.b.connected } : null,
@@ -338,7 +461,9 @@ function handleMessage(client, raw) {
 
   if (message.type === "hello") {
     client.clientKey = cleanName(message.clientKey, client.clientKey);
-    mergeLeaderboard(message.leaderboard);
+    if (mergeLeaderboard(message.leaderboard)) {
+      markStateChanged();
+    }
     const role = seatForClientKey(client.clientKey);
     if (role) {
       seats[role].connected = true;
@@ -354,6 +479,7 @@ function handleMessage(client, raw) {
     client.name = name;
     mergeLeaderboard(message.leaderboard);
     claimSeat(client, name);
+    markStateChanged();
     broadcast();
     return;
   }
@@ -362,12 +488,14 @@ function handleMessage(client, raw) {
     const name = cleanName(message.name, "Игрок");
     mergeLeaderboard(message.leaderboard);
     renameSeat(client, name);
+    markStateChanged();
     broadcast();
     return;
   }
 
   if (message.type === "leaderboard") {
     if (mergeLeaderboard(message.leaderboard)) {
+      markStateChanged();
       broadcast();
     } else {
       send(client, publicStateFor(client));
@@ -388,6 +516,7 @@ function handleMessage(client, raw) {
     try {
       game.move({ from: message.from, to: message.to, promotion: message.promotion });
       recordResultIfNeeded();
+      markStateChanged();
       broadcast();
     } catch {
       sendError(client, "Недопустимый ход.");
@@ -413,6 +542,7 @@ function handleMessage(client, raw) {
     game.reset();
     recordedResult = null;
     nextGameId();
+    markStateChanged();
     broadcast();
   }
 }
@@ -443,6 +573,8 @@ async function serveDist(req, res) {
     res.end(body);
   }
 }
+
+restorePersistedState();
 
 const httpServer = createHttpServer();
 const wss = new WebSocketServer({ noServer: true });

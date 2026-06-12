@@ -222,7 +222,7 @@ try {
   await join(white.page, "Алиса");
   let whiteProbe = await probe(white.page);
   assert(whiteProbe.role === "Белые", "first visitor should become Белые");
-  assert(whiteProbe.status === "Ход: Алиса", "White name did not drive the Russian status");
+  assert(whiteProbe.status === "ВАШ ХОД: Алиса", "White name did not drive the Russian status");
   assert(whiteProbe.score.whiteName === "Алиса", "White scoreboard name is wrong");
   assert(whiteProbe.controls.newDisabled, "new game should be disabled before the game is over");
   assert(!whiteProbe.controls.undoPresent, "takeback button should not exist in competitive mode");
@@ -262,6 +262,18 @@ try {
   assert(spectatorProbe.debug.fen === spectatorFen, "spectator changed the board");
 
   await playMove(white.page, "f2", "f3");
+  await waitForSync(white.page, black.page);
+  whiteProbe = await probe(white.page);
+  blackProbe = await probe(black.page);
+  const savedFenAfterFirstMove = whiteProbe.debug.fen;
+  assert(whiteProbe.status === "Ход соперника: Борис", "white should clearly see opponent turn after moving");
+  assert(blackProbe.status === "ВАШ ХОД: Борис", "black should clearly see own turn after white move");
+  await white.page.reload({ waitUntil: "networkidle" });
+  await white.page.waitForSelector("canvas");
+  await waitForSync(white.page, black.page);
+  whiteProbe = await probe(white.page);
+  assert(whiteProbe.debug.fen === savedFenAfterFirstMove, "server did not preserve accepted move after reload");
+  assert(whiteProbe.status === "Ход соперника: Борис", "reload should keep the saved server turn");
   const activeFen = (await probe(white.page)).debug.fen;
   await sendRawGameMessageAs(white.page, { type: "undo" });
   await sendRawGameMessageAs(white.page, { type: "newGame" });
@@ -292,7 +304,7 @@ try {
   await white.page.locator("#newGameBtn").click();
   await waitForSync(white.page, black.page, spectator.page);
   whiteProbe = await probe(white.page);
-  assert(whiteProbe.status === "Ход: Алиса", "new game should return to White's turn");
+  assert(whiteProbe.status === "ВАШ ХОД: Алиса", "new game should return to White's turn");
   assert(whiteProbe.moveList.trim() === "", "new game should clear move list");
   assert(whiteProbe.score.black === "1", "new game should keep match score");
 
