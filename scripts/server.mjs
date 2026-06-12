@@ -432,6 +432,12 @@ async function serveDist(req, res) {
     res.writeHead(200, { "Content-Type": mimeTypes[extname(filePath)] ?? "application/octet-stream" });
     res.end(body);
   } catch {
+    if (extname(pathname)) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Not found");
+      return;
+    }
+
     const body = await readFile(join(distDir, "index.html"));
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(body);
