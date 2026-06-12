@@ -8,9 +8,11 @@ import { WebSocketServer } from "ws";
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url));
 const distDir = join(rootDir, "dist");
-const port = Number(process.env.PORT ?? 5174);
-const host = process.env.HOST ?? "0.0.0.0";
 const production = process.argv.includes("--production") || process.env.NODE_ENV === "production";
+const rawPort = process.env.PORT ?? (production ? "3000" : "5174");
+const parsedPort = Number(rawPort);
+const listenTarget = Number.isFinite(parsedPort) ? parsedPort : rawPort;
+const host = process.env.HOST ?? "0.0.0.0";
 
 const clients = new Map();
 const seats = { w: null, b: null };
@@ -415,7 +417,7 @@ function handleMessage(client, raw) {
 }
 
 async function serveDist(req, res) {
-  const url = new URL(req.url ?? "/", `http://${host}:${port}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === "/") {
     pathname = "/index.html";
@@ -439,7 +441,7 @@ const httpServer = createHttpServer();
 const wss = new WebSocketServer({ noServer: true });
 
 httpServer.on("upgrade", (req, socket, head) => {
-  const { pathname } = new URL(req.url ?? "/", `http://${host}:${port}`);
+  const { pathname } = new URL(req.url ?? "/", "http://localhost");
   if (pathname !== "/game") {
     return;
   }
@@ -497,6 +499,12 @@ if (production) {
   });
 }
 
-httpServer.listen(port, host, () => {
-  console.log(`Chess Atelier running at http://${host}:${port}/`);
-});
+const handleListening = () => {
+  console.log(`Chess Atelier running on ${typeof listenTarget === "number" ? `${host}:${listenTarget}` : listenTarget}`);
+};
+
+if (typeof listenTarget === "number") {
+  httpServer.listen(listenTarget, host, handleListening);
+} else {
+  httpServer.listen(listenTarget, handleListening);
+}
