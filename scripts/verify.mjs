@@ -106,11 +106,11 @@ async function clickSquare(page, square) {
 async function playMove(page, from, to) {
   await clickSquare(page, from);
   await clickSquare(page, to);
-  await page.waitForTimeout(320);
+  await page.waitForTimeout(650);
 }
 
 async function waitForSync(...pages) {
-  await Promise.all(pages.map((page) => page.waitForTimeout(450)));
+  await Promise.all(pages.map((page) => page.waitForTimeout(700)));
 }
 
 async function sendRawGameMessageAs(page, payload) {

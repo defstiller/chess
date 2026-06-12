@@ -805,8 +805,8 @@ class ChessAtelier {
       [10.8, 5.9],
     ].forEach(([x, z], index) => this.createTorch(x, z, index % 2 === 0 ? -1 : 1));
 
-    this.createDecorativeStatue("w", -7.9, 1.85, -2.1, 0.6);
-    this.createDecorativeStatue("b", 7.9, 1.85, -2.1, -0.6);
+    this.createDecorativeStatue("w", -11.2, 1.55, -5.7, 0.72);
+    this.createDecorativeStatue("b", 11.2, 1.55, -5.7, -0.72);
   }
 
   private createPillar(x: number, z: number, material: THREE.Material) {
@@ -981,17 +981,19 @@ class ChessAtelier {
     });
 
     [-1, 1].forEach((side) => {
-      const rack = new THREE.Mesh(new RoundedBoxGeometry(0.72, 0.14, 7.7, 4, 0.08), rackMaterial);
-      rack.position.set(side * 5.24, 0.02, 0);
+      const rack = new THREE.Mesh(new RoundedBoxGeometry(1.58, 0.14, 7.9, 4, 0.08), rackMaterial);
+      rack.position.set(side * 5.72, 0.02, 0);
       rack.castShadow = true;
       rack.receiveShadow = true;
       this.boardGroup.add(rack);
 
-      const rail = new THREE.Mesh(new RoundedBoxGeometry(0.12, 0.1, 7.95, 3, 0.04), trimMaterial);
-      rail.position.set(side * 4.82, 0.12, 0);
-      rail.castShadow = true;
-      rail.receiveShadow = true;
-      this.boardGroup.add(rail);
+      [4.86, 6.56].forEach((x) => {
+        const rail = new THREE.Mesh(new RoundedBoxGeometry(0.12, 0.1, 8.08, 3, 0.04), trimMaterial);
+        rail.position.set(side * x, 0.12, 0);
+        rail.castShadow = true;
+        rail.receiveShadow = true;
+        this.boardGroup.add(rail);
+      });
     });
   }
 
@@ -2474,11 +2476,11 @@ class ChessAtelier {
       .replace(/^K/, "Кр")
       .replace(/^Q/, "Ф")
       .replace(/^R/, "Л")
-      .replace(/^B/, "С")
+      .replace(/^B/, "Сл")
       .replace(/^N/, "К")
       .replace(/=Q/g, "=Ф")
       .replace(/=R/g, "=Л")
-      .replace(/=B/g, "=С")
+      .replace(/=B/g, "=Сл")
       .replace(/=N/g, "=К");
   }
 
@@ -2539,7 +2541,7 @@ class ChessAtelier {
       counts[trophy.by] += 1;
       const target = this.trophyPosition(trophy.by, index);
       const group = this.createPiece(trophy.piece, trophy.color);
-      group.scale.multiplyScalar(0.46);
+      group.scale.multiplyScalar(this.fullScaleMode ? 0.36 : 0.42);
       group.position.copy(target);
       group.rotation.y = trophy.by === "w" ? -0.2 : 0.2;
       group.userData.kind = "trophy";
@@ -2565,7 +2567,11 @@ class ChessAtelier {
     const side = by === "w" ? 1 : -1;
     const row = index % 8;
     const column = Math.floor(index / 8);
-    return new THREE.Vector3(side * (5.24 + column * 0.42), 0.17, 3.08 - row * 0.88);
+    const clampedColumn = Math.min(column, 1);
+    const overflow = Math.max(0, column - 1);
+    const x = side * (5.36 + clampedColumn * 0.78 + overflow * 0.24);
+    const z = 3.2 - row * 0.9 - overflow * 0.04;
+    return new THREE.Vector3(x, 0.18, z);
   }
 
   private renderScoreboard(history: Move[]) {

@@ -309,7 +309,7 @@ h1 {
   width: min(300px, calc(100vw - 36px));
   max-height: calc(100vh - 128px);
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   overflow: auto;
   border-radius: 8px;
   padding: 16px;
@@ -447,10 +447,10 @@ h1 {
 
 .move-list {
   display: grid;
-  max-height: min(44vh, 430px);
+  max-height: min(32vh, 320px);
   margin: 0;
   padding: 0;
-  gap: 6px;
+  gap: 4px;
   overflow: auto;
   list-style: none;
   scrollbar-color: rgba(91, 198, 164, 0.6) transparent;
@@ -458,14 +458,16 @@ h1 {
 
 .move-row {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 34px minmax(54px, 1fr) minmax(54px, 1fr);
+  gap: 6px;
   align-items: center;
   border: 1px solid rgba(246, 241, 231, 0.08);
   border-radius: 8px;
-  padding: 8px;
+  min-height: 30px;
+  padding: 6px 7px;
   background: rgba(246, 241, 231, 0.06);
-  font-size: 0.86rem;
+  font-size: 0.82rem;
+  line-height: 1.1;
 }
 
 .move-row .move-number {
@@ -494,8 +496,8 @@ h1 {
 
 .capture-row {
   display: grid;
-  grid-template-columns: 62px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 8px;
   min-height: 30px;
   align-items: center;
   color: var(--muted);
@@ -505,13 +507,14 @@ h1 {
 
 .capture-pieces {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--ink);
   font-family: "Segoe UI Symbol", "Apple Symbols", sans-serif;
-  font-size: 1.18rem;
+  font-size: 1.04rem;
   letter-spacing: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  white-space: normal;
+  word-break: keep-all;
 }
 
 .promotion-modal,
@@ -614,17 +617,29 @@ h1 {
   }
 
   .match-panel {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.85fr) minmax(260px, 1.15fr);
     top: auto;
     right: 12px;
     bottom: 12px;
     left: 12px;
     width: auto;
-    max-height: 34vh;
+    max-height: 42vh;
     pointer-events: none;
   }
 
+  .match-panel .panel-section:nth-of-type(3) {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    min-height: 0;
+  }
+
+  .match-panel .captures {
+    grid-column: 2;
+  }
+
   .move-list {
-    max-height: 15vh;
+    max-height: 22vh;
   }
 
   .leaderboard-list {
@@ -692,6 +707,8 @@ h1 {
   }
 
   .match-panel {
+    display: flex;
+    flex-direction: column;
     left: auto;
     width: min(238px, calc(100vw - 20px));
     max-height: 340px;
