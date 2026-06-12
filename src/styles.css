@@ -97,6 +97,22 @@ button:focus-visible {
   cursor: grabbing;
 }
 
+.full-scale-mode .brand-lockup,
+.full-scale-mode .turn-cluster,
+.full-scale-mode .control-strip,
+.full-scale-mode .match-panel,
+.full-scale-mode .promotion-card {
+  background: rgba(14, 13, 16, 0.7);
+  border-color: rgba(217, 145, 74, 0.24);
+}
+
+.full-scale-mode .brand-mark {
+  background:
+    linear-gradient(90deg, transparent 48%, rgba(246, 241, 231, 0.75) 48% 52%, transparent 52%),
+    linear-gradient(0deg, transparent 48%, rgba(246, 241, 231, 0.75) 48% 52%, transparent 52%),
+    linear-gradient(135deg, #324139 0 50%, #79343b 50%);
+}
+
 .topbar {
   position: fixed;
   z-index: 5;

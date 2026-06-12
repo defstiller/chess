@@ -85,6 +85,7 @@ type DebugProbe = {
   };
   camera: {
     freeCamera: boolean;
+    fullScale: boolean;
     position: [number, number, number];
     testMode: boolean;
   };
@@ -308,6 +309,9 @@ class SoundEngine {
 }
 
 class ChessAtelier {
+  private readonly fullScaleMode =
+    window.location.pathname.startsWith("/full-scale") ||
+    new URLSearchParams(window.location.search).get("mode") === "full-scale";
   private readonly cameraTestMode =
     window.location.pathname.startsWith("/camera-test") ||
     new URLSearchParams(window.location.search).get("mode") === "camera";
@@ -444,10 +448,15 @@ class ChessAtelier {
     this.camera.position.set(5.9, 8.3, 7.4);
     this.camera.lookAt(0, 0, 0);
 
+    if (this.fullScaleMode) {
+      document.body.classList.add("full-scale-mode");
+      this.boardGroup.scale.setScalar(1.36);
+    }
+
     this.scene.add(this.boardGroup);
     this.boardGroup.add(this.highlightGroup, this.pieceGroup, this.trophyGroup);
-    this.scene.background = this.createBackdropTexture();
-    this.scene.fog = new THREE.Fog(0x0f1511, 15, 30);
+    this.scene.background = this.fullScaleMode ? this.createFantasyBackdropTexture() : this.createBackdropTexture();
+    this.scene.fog = new THREE.Fog(this.fullScaleMode ? 0x15151d : 0x0f1511, this.fullScaleMode ? 18 : 15, this.fullScaleMode ? 46 : 30);
 
     this.createLights();
     this.createTableSurface();
@@ -466,39 +475,45 @@ class ChessAtelier {
     } else {
       this.updateControls();
     }
-    if (!this.cameraTestMode) {
+    if (!this.cameraTestMode && !this.fullScaleMode) {
       this.showPlayerDialog(true);
     }
     this.animate();
   }
 
   private createBoardMaterials() {
-    const lightTexture = this.createWoodTexture("#d8bb82", "#f2dfaa", 0.2);
-    const darkTexture = this.createWoodTexture("#385446", "#1f352e", 0.42);
-    const baseTexture = this.createWoodTexture("#35281f", "#69452d", 0.32);
+    const lightTexture = this.fullScaleMode
+      ? this.createStoneTexture("#8d886f", "#3d3c33", 0.09)
+      : this.createWoodTexture("#d8bb82", "#f2dfaa", 0.2);
+    const darkTexture = this.fullScaleMode
+      ? this.createStoneTexture("#253b30", "#111a16", 0.12)
+      : this.createWoodTexture("#385446", "#1f352e", 0.42);
+    const baseTexture = this.fullScaleMode
+      ? this.createStoneTexture("#34343a", "#15151a", 0.12)
+      : this.createWoodTexture("#35281f", "#69452d", 0.32);
 
     const light = new THREE.MeshStandardMaterial({
       map: lightTexture,
-      color: 0xf6d891,
-      roughness: 0.42,
-      metalness: 0.04,
+      color: this.fullScaleMode ? 0xb1ad8b : 0xf6d891,
+      roughness: this.fullScaleMode ? 0.76 : 0.42,
+      metalness: this.fullScaleMode ? 0.01 : 0.04,
     });
     const dark = new THREE.MeshStandardMaterial({
       map: darkTexture,
-      color: 0x294736,
-      roughness: 0.52,
-      metalness: 0.03,
+      color: this.fullScaleMode ? 0x263f33 : 0x294736,
+      roughness: this.fullScaleMode ? 0.82 : 0.52,
+      metalness: this.fullScaleMode ? 0.01 : 0.03,
     });
     const rim = new THREE.MeshStandardMaterial({
-      color: 0xd9914a,
-      roughness: 0.31,
-      metalness: 0.18,
+      color: this.fullScaleMode ? 0x8f7448 : 0xd9914a,
+      roughness: this.fullScaleMode ? 0.62 : 0.31,
+      metalness: this.fullScaleMode ? 0.08 : 0.18,
     });
     const base = new THREE.MeshStandardMaterial({
       map: baseTexture,
-      color: 0x674128,
-      roughness: 0.45,
-      metalness: 0.08,
+      color: this.fullScaleMode ? 0x424048 : 0x674128,
+      roughness: this.fullScaleMode ? 0.8 : 0.45,
+      metalness: this.fullScaleMode ? 0.02 : 0.08,
     });
     const marker = new THREE.MeshBasicMaterial({
       color: 0x5bc6a4,
@@ -552,6 +567,84 @@ class ChessAtelier {
     return texture;
   }
 
+  private createFantasyBackdropTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const context = canvas.getContext("2d")!;
+    const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, "#26314b");
+    gradient.addColorStop(0.4, "#161929");
+    gradient.addColorStop(1, "#090a0d");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let i = 0; i < 130; i += 1) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height * 0.48;
+      const size = 1 + Math.random() * 2.2;
+      context.fillStyle = `rgba(246, 241, 210, ${0.12 + Math.random() * 0.38})`;
+      context.fillRect(x, y, size, size);
+    }
+
+    const ridges = [
+      { y: 680, color: "rgba(24, 25, 30, 0.92)", step: 120, height: 150 },
+      { y: 750, color: "rgba(13, 14, 18, 0.96)", step: 150, height: 120 },
+    ];
+    ridges.forEach((ridge) => {
+      context.beginPath();
+      context.moveTo(0, canvas.height);
+      for (let x = 0; x <= canvas.width + ridge.step; x += ridge.step) {
+        context.lineTo(x, ridge.y - Math.random() * ridge.height);
+      }
+      context.lineTo(canvas.width, canvas.height);
+      context.closePath();
+      context.fillStyle = ridge.color;
+      context.fill();
+    });
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  private createStoneTexture(base: string, line: string, density: number) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 512;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = base;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let y = 0; y < canvas.height; y += 64) {
+      const offset = (y / 64) % 2 === 0 ? 0 : 54;
+      context.strokeStyle = this.withAlpha(line, 0.55);
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(0, y);
+      context.lineTo(canvas.width, y);
+      context.stroke();
+      for (let x = -offset; x < canvas.width; x += 108) {
+        context.beginPath();
+        context.moveTo(x, y);
+        context.lineTo(x + Math.sin(y * 0.03) * 6, y + 64);
+        context.stroke();
+      }
+    }
+
+    for (let i = 0; i < 1700; i += 1) {
+      const shade = Math.random() > 0.48 ? 255 : 0;
+      context.fillStyle = `rgba(${shade}, ${shade}, ${shade}, ${density * Math.random()})`;
+      context.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 1 + Math.random() * 2, 1 + Math.random() * 2);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
   private createWoodTexture(base: string, vein: string, density: number) {
     const canvas = document.createElement("canvas");
     canvas.width = 256;
@@ -594,32 +687,37 @@ class ChessAtelier {
   }
 
   private createLights() {
-    const ambient = new THREE.HemisphereLight(0xffecd0, 0x101813, 1.35);
+    const ambient = new THREE.HemisphereLight(this.fullScaleMode ? 0xbfc8ff : 0xffecd0, 0x101813, this.fullScaleMode ? 0.92 : 1.35);
     this.scene.add(ambient);
 
-    const key = new THREE.DirectionalLight(0xfff1c9, 2.7);
-    key.position.set(-4.2, 10, 5.4);
+    const key = new THREE.DirectionalLight(this.fullScaleMode ? 0xdfe7ff : 0xfff1c9, this.fullScaleMode ? 2.15 : 2.7);
+    key.position.set(this.fullScaleMode ? -9 : -4.2, this.fullScaleMode ? 13 : 10, this.fullScaleMode ? 9 : 5.4);
     key.castShadow = true;
-    key.shadow.mapSize.width = 2048;
-    key.shadow.mapSize.height = 2048;
+    key.shadow.mapSize.width = this.fullScaleMode ? 3072 : 2048;
+    key.shadow.mapSize.height = this.fullScaleMode ? 3072 : 2048;
     key.shadow.camera.near = 1;
-    key.shadow.camera.far = 22;
-    key.shadow.camera.left = -7;
-    key.shadow.camera.right = 7;
-    key.shadow.camera.top = 7;
-    key.shadow.camera.bottom = -7;
+    key.shadow.camera.far = this.fullScaleMode ? 42 : 22;
+    key.shadow.camera.left = this.fullScaleMode ? -17 : -7;
+    key.shadow.camera.right = this.fullScaleMode ? 17 : 7;
+    key.shadow.camera.top = this.fullScaleMode ? 17 : 7;
+    key.shadow.camera.bottom = this.fullScaleMode ? -17 : -7;
     this.scene.add(key);
 
-    const accent = new THREE.PointLight(0x6be0c5, 2.4, 16);
-    accent.position.set(5.2, 4.8, -5);
+    const accent = new THREE.PointLight(0x6be0c5, this.fullScaleMode ? 1.2 : 2.4, this.fullScaleMode ? 24 : 16);
+    accent.position.set(this.fullScaleMode ? 8.6 : 5.2, this.fullScaleMode ? 5.8 : 4.8, this.fullScaleMode ? -6.5 : -5);
     this.scene.add(accent);
 
-    const rim = new THREE.DirectionalLight(0x8fb8ff, 0.9);
-    rim.position.set(6, 5.5, 3);
+    const rim = new THREE.DirectionalLight(0x8fb8ff, this.fullScaleMode ? 1.25 : 0.9);
+    rim.position.set(this.fullScaleMode ? 10 : 6, this.fullScaleMode ? 8.5 : 5.5, this.fullScaleMode ? 5 : 3);
     this.scene.add(rim);
   }
 
   private createTableSurface() {
+    if (this.fullScaleMode) {
+      this.createFullScaleWorld();
+      return;
+    }
+
     const texture = this.createWoodTexture("#16100c", "#7a4a2a", 0.18);
     texture?.repeat.set(3.5, 2.2);
     const material = new THREE.MeshStandardMaterial({
@@ -633,6 +731,194 @@ class ChessAtelier {
     table.rotation.x = -Math.PI / 2;
     table.receiveShadow = true;
     this.scene.add(table);
+  }
+
+  private createFullScaleWorld() {
+    const floorTexture = this.createStoneTexture("#2c2e30", "#101113", 0.13);
+    floorTexture.repeat.set(8, 8);
+    const floorMaterial = new THREE.MeshStandardMaterial({
+      map: floorTexture,
+      color: 0x3b3e3f,
+      roughness: 0.86,
+      metalness: 0.01,
+    });
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(44, 44), floorMaterial);
+    floor.position.set(0, -0.62, 0);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    this.scene.add(floor);
+
+    const wallTexture = this.createStoneTexture("#303139", "#111217", 0.15);
+    wallTexture.repeat.set(5, 2);
+    const wallMaterial = new THREE.MeshStandardMaterial({
+      map: wallTexture,
+      color: 0x3d3e48,
+      roughness: 0.82,
+      metalness: 0.02,
+    });
+    [
+      { x: 0, z: -13.5, w: 26, h: 4.8, d: 0.7 },
+      { x: -13.2, z: 0, w: 0.7, h: 4.1, d: 22 },
+      { x: 13.2, z: 0, w: 0.7, h: 4.1, d: 22 },
+    ].forEach((wall) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(wall.w, wall.h, wall.d), wallMaterial);
+      mesh.position.set(wall.x, 1.42, wall.z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+    });
+
+    const pillarMaterial = new THREE.MeshStandardMaterial({
+      color: 0x57545a,
+      roughness: 0.76,
+      metalness: 0.03,
+    });
+    [
+      [-9.2, -9.8],
+      [9.2, -9.8],
+      [-9.2, 8.6],
+      [9.2, 8.6],
+    ].forEach(([x, z]) => this.createPillar(x, z, pillarMaterial));
+
+    this.createArchway(0, -13.12, wallMaterial);
+    this.createBanners();
+    [
+      [-10.8, -6.8],
+      [10.8, -6.8],
+      [-10.8, 5.9],
+      [10.8, 5.9],
+    ].forEach(([x, z], index) => this.createTorch(x, z, index % 2 === 0 ? -1 : 1));
+
+    this.createDecorativeStatue("w", -7.9, 1.85, -2.1, 0.6);
+    this.createDecorativeStatue("b", 7.9, 1.85, -2.1, -0.6);
+  }
+
+  private createPillar(x: number, z: number, material: THREE.Material) {
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.82, 0.36, 8), material);
+    base.position.set(x, -0.4, z);
+    base.castShadow = true;
+    base.receiveShadow = true;
+    this.scene.add(base);
+
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.54, 4.5, 10), material);
+    shaft.position.set(x, 1.95, z);
+    shaft.castShadow = true;
+    shaft.receiveShadow = true;
+    this.scene.add(shaft);
+
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.62, 0.38, 8), material);
+    cap.position.set(x, 4.34, z);
+    cap.castShadow = true;
+    cap.receiveShadow = true;
+    this.scene.add(cap);
+  }
+
+  private createArchway(x: number, z: number, material: THREE.Material) {
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.72, 0.9), material);
+    lintel.position.set(x, 3.7, z + 0.02);
+    lintel.castShadow = true;
+    lintel.receiveShadow = true;
+    this.scene.add(lintel);
+
+    [-1, 1].forEach((side) => {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.82, 4.3, 0.9), material);
+      post.position.set(x + side * 3.26, 1.45, z + 0.02);
+      post.castShadow = true;
+      post.receiveShadow = true;
+      this.scene.add(post);
+    });
+  }
+
+  private createBanners() {
+    const bannerData = [
+      { x: -5.4, z: -12.98, color: "#79343b", sigil: "#d8bb82" },
+      { x: 5.4, z: -12.98, color: "#244d58", sigil: "#8fd0c7" },
+    ];
+    bannerData.forEach((banner) => {
+      const texture = this.createBannerTexture(banner.color, banner.sigil);
+      const material = new THREE.MeshStandardMaterial({
+        map: texture,
+        transparent: true,
+        roughness: 0.7,
+        metalness: 0.02,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.55, 3.1, 1, 6), material);
+      mesh.position.set(banner.x, 2.15, banner.z);
+      mesh.rotation.y = 0;
+      mesh.castShadow = true;
+      this.scene.add(mesh);
+    });
+  }
+
+  private createBannerTexture(color: string, sigil: string) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 512;
+    const context = canvas.getContext("2d")!;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = color;
+    context.fillRect(32, 18, 192, 450);
+    context.fillStyle = "rgba(0,0,0,0.18)";
+    for (let x = 44; x < 224; x += 28) {
+      context.fillRect(x, 18, 6, 450);
+    }
+    context.fillStyle = sigil;
+    context.beginPath();
+    context.moveTo(128, 112);
+    context.lineTo(178, 202);
+    context.lineTo(128, 292);
+    context.lineTo(78, 202);
+    context.closePath();
+    context.fill();
+    context.fillStyle = color;
+    context.fillRect(32, 442, 54, 80);
+    context.fillRect(170, 442, 54, 80);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  private createTorch(x: number, z: number, side: number) {
+    const iron = new THREE.MeshStandardMaterial({ color: 0x1c1a18, roughness: 0.48, metalness: 0.52 });
+    const flame = new THREE.MeshBasicMaterial({ color: 0xffb04f, transparent: true, opacity: 0.88 });
+
+    const bracket = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.1, 10), iron);
+    bracket.position.set(x, 1.95, z);
+    bracket.rotation.z = Math.PI / 2;
+    bracket.castShadow = true;
+    this.scene.add(bracket);
+
+    const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.34, 0.2, 12), iron);
+    bowl.position.set(x + side * 0.46, 1.95, z);
+    bowl.castShadow = true;
+    this.scene.add(bowl);
+
+    const fire = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.55, 9), flame);
+    fire.position.set(x + side * 0.46, 2.32, z);
+    fire.userData.flame = true;
+    this.scene.add(fire);
+
+    const light = new THREE.PointLight(0xff8a3d, 3.2, 10);
+    light.position.set(x + side * 0.46, 2.35, z);
+    light.userData.flameLight = true;
+    this.scene.add(light);
+  }
+
+  private createDecorativeStatue(color: Color, x: number, scale: number, z: number, rotation: number) {
+    const statue = this.createPiece("k", color);
+    statue.position.set(x, -0.34, z);
+    statue.scale.setScalar(scale);
+    statue.rotation.y = rotation;
+    statue.traverse((object) => {
+      object.userData.kind = "statue";
+      if (object instanceof THREE.Mesh) {
+        object.receiveShadow = true;
+        object.castShadow = true;
+      }
+    });
+    this.scene.add(statue);
   }
 
   private createBoard() {
@@ -1061,10 +1347,10 @@ class ChessAtelier {
     controls.rotateSpeed = 0.72;
     controls.zoomSpeed = 0.82;
     controls.panSpeed = 0.56;
-    controls.minDistance = 5.2;
-    controls.maxDistance = 18;
-    controls.minPolarAngle = 0.22;
-    controls.maxPolarAngle = Math.PI / 2.05;
+    controls.minDistance = this.fullScaleMode ? 8 : 5.2;
+    controls.maxDistance = this.fullScaleMode ? 34 : 18;
+    controls.minPolarAngle = this.fullScaleMode ? 0.18 : 0.22;
+    controls.maxPolarAngle = this.fullScaleMode ? Math.PI / 1.94 : Math.PI / 2.05;
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
@@ -1162,10 +1448,15 @@ class ChessAtelier {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     const small = width < 760;
-    this.boardGroup.position.x = small ? 0 : -1.05;
+    this.boardGroup.position.x = small ? 0 : this.fullScaleMode ? -0.35 : -1.05;
     if (!this.cameraControls) {
-      this.camera.position.set(small ? 8.4 : 7.35, small ? 10.8 : 9.55, small ? 12.2 : 9.65);
-      this.camera.fov = small ? 48 : 35;
+      if (this.fullScaleMode) {
+        this.camera.position.set(small ? 14 : 12.8, small ? 13.5 : 10.8, small ? 20 : 17.4);
+        this.camera.fov = small ? 54 : 42;
+      } else {
+        this.camera.position.set(small ? 8.4 : 7.35, small ? 10.8 : 9.55, small ? 12.2 : 9.65);
+        this.camera.fov = small ? 48 : 35;
+      }
       this.camera.lookAt(0, 0, 0);
     } else {
       this.cameraControls.target.copy(this.boardGroup.position);
@@ -1472,7 +1763,7 @@ class ChessAtelier {
 
     if (this.role) {
       this.hidePlayerDialog();
-    } else if (!this.cameraTestMode) {
+    } else if (!this.cameraTestMode && !this.fullScaleMode) {
       this.showPlayerDialog(true);
     }
   }
@@ -2288,6 +2579,7 @@ class ChessAtelier {
       },
       camera: {
         freeCamera: Boolean(this.cameraControls),
+        fullScale: this.fullScaleMode,
         position: [this.camera.position.x, this.camera.position.y, this.camera.position.z],
         testMode: this.cameraTestMode,
       },
@@ -2355,6 +2647,17 @@ class ChessAtelier {
     this.trophyGroup.children.forEach((piece) => {
       this.animateMotion(piece, now);
     });
+    if (this.fullScaleMode) {
+      this.scene.traverse((object) => {
+        if (object.userData.flame) {
+          const pulse = 0.86 + Math.sin(elapsed * 8.5 + object.id) * 0.1 + Math.sin(elapsed * 15.2 + object.id) * 0.04;
+          object.scale.set(1, pulse, 1);
+        }
+        if (object instanceof THREE.PointLight && object.userData.flameLight) {
+          object.intensity = 2.7 + Math.sin(elapsed * 7.4 + object.id) * 0.42 + Math.sin(elapsed * 13.1) * 0.18;
+        }
+      });
+    }
 
     this.cameraControls?.update();
     this.renderer.render(this.scene, this.camera);
