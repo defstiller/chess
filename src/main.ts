@@ -1,5 +1,6 @@
 import { Chess, type Color, type Move, type PieceSymbol, type Square } from "chess.js";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import "./styles.css";
 
@@ -82,6 +83,10 @@ type DebugProbe = {
     clientWidth: number;
     clientHeight: number;
   };
+  camera: {
+    position: [number, number, number];
+    testMode: boolean;
+  };
   fen: string;
   frame: number;
   nonTransparentSamples: number;
@@ -92,6 +97,15 @@ type DebugProbe = {
   selectedSquare: string | null;
   status: string;
   playerNames: PlayerNames;
+};
+
+type BoardPointerStart = {
+  pointerId: number;
+  button: number;
+  x: number;
+  y: number;
+  square: Square | null;
+  moved: boolean;
 };
 
 const files = ["a", "b", "c", "d", "e", "f", "g", "h"] as const;
@@ -124,6 +138,9 @@ const squareTopY = 0.075;
 const leaderboardStorageKey = "chessAtelierLeaderboard";
 
 class ChessAtelier {
+  private readonly cameraTestMode =
+    window.location.pathname.startsWith("/camera-test") ||
+    new URLSearchParams(window.location.search).get("mode") === "camera";
   private readonly game = new Chess();
   private readonly mount: HTMLElement;
   private readonly scene = new THREE.Scene();
@@ -135,6 +152,7 @@ class ChessAtelier {
   private readonly clock = new THREE.Clock();
   private readonly renderer: THREE.WebGLRenderer;
   private readonly camera: THREE.PerspectiveCamera;
+  private cameraControls: OrbitControls | null = null;
   private readonly squareMeshes: THREE.Mesh[] = [];
   private readonly pieceMeshes: THREE.Object3D[] = [];
   private readonly boardMaterials: {
@@ -172,6 +190,7 @@ class ChessAtelier {
   private flipped = false;
   private targetRotation = 0;
   private frame = 0;
+  private boardPointerStart: BoardPointerStart | null = null;
 
   private readonly statusText = document.querySelector<HTMLSpanElement>("#statusText")!;
   private readonly roleBadge = document.querySelector<HTMLSpanElement>("#roleBadge")!;
@@ -259,6 +278,7 @@ class ChessAtelier {
     this.rebuildPieces();
     this.bindEvents();
     this.onResize();
+    this.setupCameraTestMode();
     this.updateHud();
     this.installDebugApi();
     if (this.shouldUseServer()) {
@@ -266,7 +286,9 @@ class ChessAtelier {
     } else {
       this.updateControls();
     }
-    this.showPlayerDialog(true);
+    if (!this.cameraTestMode) {
+      this.showPlayerDialog(true);
+    }
     this.animate();
   }
 
@@ -806,10 +828,47 @@ class ChessAtelier {
     group.add(mesh);
   }
 
+  private setupCameraTestMode() {
+    if (!this.cameraTestMode) {
+      return;
+    }
+
+    document.body.classList.add("camera-test-mode");
+    this.renderer.domElement.dataset.cameraMode = "orbit";
+
+    const controls = new OrbitControls(this.camera, this.renderer.domElement);
+    controls.target.copy(this.boardGroup.position);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.rotateSpeed = 0.72;
+    controls.zoomSpeed = 0.82;
+    controls.panSpeed = 0.56;
+    controls.minDistance = 5.2;
+    controls.maxDistance = 18;
+    controls.minPolarAngle = 0.22;
+    controls.maxPolarAngle = Math.PI / 2.05;
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
+    };
+    controls.update();
+    this.cameraControls = controls;
+  }
+
   private bindEvents() {
     window.addEventListener("resize", () => this.onResize());
     this.renderer.domElement.addEventListener("pointermove", (event) => this.onPointerMove(event));
     this.renderer.domElement.addEventListener("pointerdown", (event) => this.onPointerDown(event));
+    this.renderer.domElement.addEventListener("pointerup", (event) => this.onPointerUp(event));
+    this.renderer.domElement.addEventListener("pointercancel", () => {
+      this.boardPointerStart = null;
+    });
+    this.renderer.domElement.addEventListener("contextmenu", (event) => {
+      if (this.cameraTestMode) {
+        event.preventDefault();
+      }
+    });
 
     document.querySelector<HTMLButtonElement>("#newGameBtn")!.addEventListener("click", () => {
       if (!this.game.isGameOver()) {
@@ -867,9 +926,11 @@ class ChessAtelier {
     this.camera.aspect = width / height;
     const small = width < 760;
     this.boardGroup.position.x = small ? 0 : -1.05;
-    this.camera.position.set(small ? 8.4 : 7.35, small ? 10.8 : 9.55, small ? 12.2 : 9.65);
-    this.camera.fov = small ? 48 : 35;
-    this.camera.lookAt(0, 0, 0);
+    if (!this.cameraControls) {
+      this.camera.position.set(small ? 8.4 : 7.35, small ? 10.8 : 9.55, small ? 12.2 : 9.65);
+      this.camera.fov = small ? 48 : 35;
+      this.camera.lookAt(0, 0, 0);
+    }
     this.camera.updateProjectionMatrix();
   }
 
@@ -878,8 +939,23 @@ class ChessAtelier {
       return;
     }
 
+    if (this.cameraTestMode && this.boardPointerStart) {
+      const dragDistance = Math.hypot(event.clientX - this.boardPointerStart.x, event.clientY - this.boardPointerStart.y);
+      if (dragDistance > 5) {
+        this.boardPointerStart.moved = true;
+      }
+    }
+
     const square = this.pickSquare(event);
     this.hoverSquare = square;
+    if (this.cameraTestMode) {
+      this.renderer.domElement.style.cursor = this.boardPointerStart?.moved
+        ? "grabbing"
+        : square && this.canInteractWithBoard()
+          ? "pointer"
+          : "grab";
+      return;
+    }
     this.renderer.domElement.style.cursor = square && this.canInteractWithBoard() ? "pointer" : "default";
   }
 
@@ -888,7 +964,43 @@ class ChessAtelier {
       return;
     }
 
+    if (this.cameraTestMode) {
+      if (event.button === 0) {
+        this.boardPointerStart = {
+          pointerId: event.pointerId,
+          button: event.button,
+          x: event.clientX,
+          y: event.clientY,
+          square: this.pickSquare(event),
+          moved: false,
+        };
+      }
+      return;
+    }
+
     const square = this.pickSquare(event);
+    if (!square) {
+      this.selectedSquare = null;
+      this.updateHighlights();
+      return;
+    }
+
+    this.handleSquare(square);
+  }
+
+  private onPointerUp(event: PointerEvent) {
+    if (!this.cameraTestMode || !this.boardPointerStart) {
+      return;
+    }
+
+    const start = this.boardPointerStart;
+    this.boardPointerStart = null;
+
+    if (event.pointerId !== start.pointerId || start.button !== 0 || start.moved || this.pendingPromotion) {
+      return;
+    }
+
+    const square = this.pickSquare(event) ?? start.square;
     if (!square) {
       this.selectedSquare = null;
       this.updateHighlights();
@@ -1118,7 +1230,7 @@ class ChessAtelier {
 
     if (this.role) {
       this.hidePlayerDialog();
-    } else {
+    } else if (!this.cameraTestMode) {
       this.showPlayerDialog(true);
     }
   }
@@ -1780,6 +1892,10 @@ class ChessAtelier {
         clientWidth: this.renderer.domElement.clientWidth,
         clientHeight: this.renderer.domElement.clientHeight,
       },
+      camera: {
+        position: [this.camera.position.x, this.camera.position.y, this.camera.position.z],
+        testMode: this.cameraTestMode,
+      },
       fen: this.game.fen(),
       frame: this.frame,
       nonTransparentSamples,
@@ -1814,6 +1930,7 @@ class ChessAtelier {
       }
     });
 
+    this.cameraControls?.update();
     this.renderer.render(this.scene, this.camera);
     window.requestAnimationFrame(() => this.animate());
   }

@@ -89,6 +89,14 @@ button:focus-visible {
   height: 100%;
 }
 
+.camera-test-mode #scene canvas {
+  cursor: grab;
+}
+
+.camera-test-mode #scene canvas:active {
+  cursor: grabbing;
+}
+
 .topbar {
   position: fixed;
   z-index: 5;
