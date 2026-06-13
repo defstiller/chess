@@ -171,6 +171,12 @@ type ModelFit = {
   groundY: number;
 };
 
+type ClassicModelFit = {
+  maxWidth: number;
+  maxDepth: number;
+  maxHeight: number;
+};
+
 type DecorativeStatueSpec = {
   color: Color;
   piece: PieceSymbol;
@@ -213,7 +219,15 @@ const pieceStyleStorageKey = "chessAtelierPieceStyle";
 const assetBaseUrl = import.meta.env.BASE_URL || "/";
 const modelAssetBaseUrl = assetBaseUrl.replace(/\/$/, "");
 const modelCacheKey = "ru-models-1";
-const classicKnightUrl = `${modelAssetBaseUrl}/models/classic/staunton-knight.stl?v=staunton-1`;
+const classicModelCacheKey = "staunton-set-1";
+const classicPieceUrls: Record<PieceSymbol, string> = {
+  p: `${modelAssetBaseUrl}/models/classic/staunton-pawn.stl?v=${classicModelCacheKey}`,
+  r: `${modelAssetBaseUrl}/models/classic/staunton-rook.stl?v=${classicModelCacheKey}`,
+  n: `${modelAssetBaseUrl}/models/classic/staunton-knight.stl?v=${classicModelCacheKey}`,
+  b: `${modelAssetBaseUrl}/models/classic/staunton-bishop.stl?v=${classicModelCacheKey}`,
+  q: `${modelAssetBaseUrl}/models/classic/staunton-queen.stl?v=${classicModelCacheKey}`,
+  k: `${modelAssetBaseUrl}/models/classic/staunton-king.stl?v=${classicModelCacheKey}`,
+};
 const modelPieceUrls: Record<PieceSymbol, string> = {
   p: `${modelAssetBaseUrl}/models/custom/ru-peshka.glb?v=${modelCacheKey}`,
   r: `${modelAssetBaseUrl}/models/custom/ru-ladya.glb?v=${modelCacheKey}`,
@@ -229,6 +243,14 @@ const modelPieceFits: Record<PieceSymbol, ModelFit> = {
   b: { maxWidth: 0.9, maxDepth: 1.05, maxHeight: 1.26, groundY: 0.27 },
   q: { maxWidth: 0.98, maxDepth: 0.82, maxHeight: 1.45, groundY: 0.27 },
   k: { maxWidth: 0.96, maxDepth: 0.78, maxHeight: 1.45, groundY: 0.27 },
+};
+const classicPieceFits: Record<PieceSymbol, ClassicModelFit> = {
+  p: { maxWidth: 0.56, maxDepth: 0.56, maxHeight: 0.94 },
+  r: { maxWidth: 0.72, maxDepth: 0.72, maxHeight: 1.08 },
+  n: { maxWidth: 0.78, maxDepth: 0.78, maxHeight: 1.38 },
+  b: { maxWidth: 0.72, maxDepth: 0.72, maxHeight: 1.28 },
+  q: { maxWidth: 0.78, maxDepth: 0.78, maxHeight: 1.48 },
+  k: { maxWidth: 0.8, maxDepth: 0.8, maxHeight: 1.58 },
 };
 const decorativeStatueSpecs: DecorativeStatueSpec[] = [
   { color: "w", piece: "q", x: -11.2, scale: 1.55, z: -5.7, rotation: -2.04 },
@@ -450,8 +472,8 @@ class ChessAtelier {
   private stateRevision = 0;
   private role: PlayerRole = null;
   private modelAssets: Partial<Record<PieceSymbol, ModelAsset>> = {};
-  private classicKnightGeometry: THREE.BufferGeometry | null = null;
-  private loadingClassicKnight = false;
+  private classicPieceGeometries: Partial<Record<PieceSymbol, THREE.BufferGeometry>> = {};
+  private loadingClassicPieces = false;
   private serverHistory: Move[] | null = null;
   private displayName = window.localStorage.getItem("chessAtelierDisplayName") ?? "";
   private readonly localMatchId = `${this.clientKey}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
@@ -625,7 +647,7 @@ class ChessAtelier {
     this.installDebugApi();
     void this.loadModelAssets();
     if (this.pieceStyle === "classic") {
-      void this.loadClassicKnightAsset();
+      void this.loadClassicPieceAssets();
     }
     if (this.serverExpected) {
       this.connectToServer();
@@ -1253,28 +1275,47 @@ class ChessAtelier {
     }
   }
 
-  private async loadClassicKnightAsset() {
-    if (this.classicKnightGeometry || this.loadingClassicKnight) {
+  private async loadClassicPieceAssets() {
+    const unloadedEntries = (Object.entries(classicPieceUrls) as Array<[PieceSymbol, string]>).filter(
+      ([type]) => !this.classicPieceGeometries[type],
+    );
+
+    if (unloadedEntries.length === 0 || this.loadingClassicPieces) {
       return;
     }
 
-    this.loadingClassicKnight = true;
+    this.loadingClassicPieces = true;
     try {
-      const geometry = await this.stlLoader.loadAsync(classicKnightUrl);
-      this.classicKnightGeometry = this.prepareClassicKnightGeometry(geometry);
-      if (this.pieceStyle === "classic") {
+      const loadedEntries = await Promise.all(
+        unloadedEntries.map(async ([type, url]) => {
+          try {
+            const geometry = await this.stlLoader.loadAsync(url);
+            return [type, this.prepareClassicPieceGeometry(type, geometry)] as const;
+          } catch (error) {
+            console.warn(`Classic model for ${type} failed to load; using procedural fallback.`, error);
+            return null;
+          }
+        }),
+      );
+
+      this.classicPieceGeometries = { ...this.classicPieceGeometries };
+      loadedEntries.forEach((entry) => {
+        if (entry) {
+          this.classicPieceGeometries[entry[0]] = entry[1];
+        }
+      });
+
+      if (loadedEntries.some(Boolean) && this.pieceStyle === "classic") {
         this.rebuildPieces();
         this.rebuildDecorativeStatues();
         this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
       }
-    } catch (error) {
-      console.warn("Classic knight model failed to load; using procedural fallback.", error);
     } finally {
-      this.loadingClassicKnight = false;
+      this.loadingClassicPieces = false;
     }
   }
 
-  private prepareClassicKnightGeometry(geometry: THREE.BufferGeometry) {
+  private prepareClassicPieceGeometry(type: PieceSymbol, geometry: THREE.BufferGeometry) {
     geometry.computeVertexNormals();
     geometry.computeBoundingBox();
     const box = geometry.boundingBox;
@@ -1286,7 +1327,8 @@ class ChessAtelier {
     const center = new THREE.Vector3();
     box.getSize(size);
     box.getCenter(center);
-    const scale = Math.min(0.78 / size.x, 1.38 / size.y, 0.78 / size.z);
+    const fit = classicPieceFits[type];
+    const scale = Math.min(fit.maxWidth / size.x, fit.maxHeight / size.y, fit.maxDepth / size.z);
     geometry.translate(-center.x, -box.min.y, -center.z);
     geometry.scale(scale, scale, scale);
     geometry.computeBoundingBox();
@@ -1419,15 +1461,16 @@ class ChessAtelier {
     const body = color === "w" ? this.classicWhiteMaterial : this.classicBlackMaterial;
     const trim = color === "w" ? this.classicWhiteTrimMaterial : this.classicBlackTrimMaterial;
     const accent = color === "w" ? this.classicBlackTrimMaterial : this.classicWhiteTrimMaterial;
-    const scale = type === "p" ? 0.9 : type === "r" ? 0.96 : type === "n" ? 0.98 : type === "b" ? 1 : 1.06;
-    group.scale.setScalar(scale);
-
-    if (type === "n" && this.classicKnightGeometry) {
-      this.addBaseShadow(group, 0.42);
-      this.addClassicKnightModel(group, body);
+    const classicGeometry = this.classicPieceGeometries[type];
+    if (classicGeometry) {
+      const fit = classicPieceFits[type];
+      this.addBaseShadow(group, Math.max(fit.maxWidth, fit.maxDepth) * 0.58);
+      this.addClassicModelPiece(group, type, body);
       return group;
     }
 
+    const scale = type === "p" ? 0.9 : type === "r" ? 0.96 : type === "n" ? 0.98 : type === "b" ? 1 : 1.06;
+    group.scale.setScalar(scale);
     this.addClassicBase(group, body, trim);
 
     if (type === "p") {
@@ -1447,12 +1490,13 @@ class ChessAtelier {
     return group;
   }
 
-  private addClassicKnightModel(group: THREE.Group, body: THREE.Material) {
-    if (!this.classicKnightGeometry) {
+  private addClassicModelPiece(group: THREE.Group, type: PieceSymbol, body: THREE.Material) {
+    const geometry = this.classicPieceGeometries[type];
+    if (!geometry) {
       return;
     }
 
-    const mesh = new THREE.Mesh(this.classicKnightGeometry, body);
+    const mesh = new THREE.Mesh(geometry, body);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData.keepGeometry = true;
@@ -2894,7 +2938,7 @@ class ChessAtelier {
     window.localStorage.setItem(pieceStyleStorageKey, this.pieceStyle);
     this.updatePieceStyleButton();
     if (this.pieceStyle === "classic") {
-      void this.loadClassicKnightAsset();
+      void this.loadClassicPieceAssets();
     }
     this.rebuildPieces();
     this.rebuildDecorativeStatues();
