@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 import "./styles.css";
 
@@ -212,6 +213,7 @@ const pieceStyleStorageKey = "chessAtelierPieceStyle";
 const assetBaseUrl = import.meta.env.BASE_URL || "/";
 const modelAssetBaseUrl = assetBaseUrl.replace(/\/$/, "");
 const modelCacheKey = "ru-models-1";
+const classicKnightUrl = `${modelAssetBaseUrl}/models/classic/staunton-knight.stl?v=staunton-1`;
 const modelPieceUrls: Record<PieceSymbol, string> = {
   p: `${modelAssetBaseUrl}/models/custom/ru-peshka.glb?v=${modelCacheKey}`,
   r: `${modelAssetBaseUrl}/models/custom/ru-ladya.glb?v=${modelCacheKey}`,
@@ -390,6 +392,7 @@ class ChessAtelier {
   private readonly decorativeStatueGroup = new THREE.Group();
   private readonly sound = new SoundEngine();
   private readonly modelLoader = new GLTFLoader();
+  private readonly stlLoader = new STLLoader();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly clock = new THREE.Clock();
@@ -447,6 +450,8 @@ class ChessAtelier {
   private stateRevision = 0;
   private role: PlayerRole = null;
   private modelAssets: Partial<Record<PieceSymbol, ModelAsset>> = {};
+  private classicKnightGeometry: THREE.BufferGeometry | null = null;
+  private loadingClassicKnight = false;
   private serverHistory: Move[] | null = null;
   private displayName = window.localStorage.getItem("chessAtelierDisplayName") ?? "";
   private readonly localMatchId = `${this.clientKey}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
@@ -619,6 +624,9 @@ class ChessAtelier {
     this.updateHud();
     this.installDebugApi();
     void this.loadModelAssets();
+    if (this.pieceStyle === "classic") {
+      void this.loadClassicKnightAsset();
+    }
     if (this.serverExpected) {
       this.connectToServer();
     } else {
@@ -1245,6 +1253,47 @@ class ChessAtelier {
     }
   }
 
+  private async loadClassicKnightAsset() {
+    if (this.classicKnightGeometry || this.loadingClassicKnight) {
+      return;
+    }
+
+    this.loadingClassicKnight = true;
+    try {
+      const geometry = await this.stlLoader.loadAsync(classicKnightUrl);
+      this.classicKnightGeometry = this.prepareClassicKnightGeometry(geometry);
+      if (this.pieceStyle === "classic") {
+        this.rebuildPieces();
+        this.rebuildDecorativeStatues();
+        this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
+      }
+    } catch (error) {
+      console.warn("Classic knight model failed to load; using procedural fallback.", error);
+    } finally {
+      this.loadingClassicKnight = false;
+    }
+  }
+
+  private prepareClassicKnightGeometry(geometry: THREE.BufferGeometry) {
+    geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    if (!box) {
+      return geometry;
+    }
+
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+    const scale = Math.min(0.78 / size.x, 1.38 / size.y, 0.78 / size.z);
+    geometry.translate(-center.x, -box.min.y, -center.z);
+    geometry.scale(scale, scale, scale);
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
   private prepareModelAsset(gltf: GLTF): ModelAsset {
     gltf.scene.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -1373,6 +1422,12 @@ class ChessAtelier {
     const scale = type === "p" ? 0.9 : type === "r" ? 0.96 : type === "n" ? 0.98 : type === "b" ? 1 : 1.06;
     group.scale.setScalar(scale);
 
+    if (type === "n" && this.classicKnightGeometry) {
+      this.addBaseShadow(group, 0.42);
+      this.addClassicKnightModel(group, body);
+      return group;
+    }
+
     this.addClassicBase(group, body, trim);
 
     if (type === "p") {
@@ -1390,6 +1445,18 @@ class ChessAtelier {
     }
 
     return group;
+  }
+
+  private addClassicKnightModel(group: THREE.Group, body: THREE.Material) {
+    if (!this.classicKnightGeometry) {
+      return;
+    }
+
+    const mesh = new THREE.Mesh(this.classicKnightGeometry, body);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.keepGeometry = true;
+    group.add(mesh);
   }
 
   private addClassicBase(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
@@ -1458,7 +1525,7 @@ class ChessAtelier {
         [0.24, 0.36],
         [0.16, 0.54],
         [0.2, 0.68],
-        [0.15, 0.82],
+        [0.18, 0.84],
       ],
       body,
     );
@@ -1535,48 +1602,42 @@ class ChessAtelier {
 
   private addClassicKnightHead(group: THREE.Group, body: THREE.Material, trim: THREE.Material, color: Color) {
     const headGroup = new THREE.Group();
-    headGroup.position.set(-0.05, 0.04, 0);
-    headGroup.scale.set(0.74, 0.87, 0.82);
+    headGroup.position.set(-0.01, 0.02, 0);
+    headGroup.scale.set(0.96, 0.95, 0.9);
     group.add(headGroup);
 
-    const profile = new THREE.Shape();
-    profile.moveTo(-0.22, 0.75);
-    profile.bezierCurveTo(-0.32, 0.92, -0.27, 1.15, -0.11, 1.31);
-    profile.bezierCurveTo(0.01, 1.44, 0.16, 1.52, 0.31, 1.5);
-    profile.bezierCurveTo(0.44, 1.48, 0.51, 1.38, 0.51, 1.27);
-    profile.bezierCurveTo(0.67, 1.22, 0.76, 1.1, 0.71, 0.99);
-    profile.bezierCurveTo(0.66, 0.89, 0.49, 0.88, 0.36, 0.95);
-    profile.bezierCurveTo(0.27, 0.99, 0.2, 0.94, 0.16, 0.84);
-    profile.bezierCurveTo(0.06, 0.89, -0.07, 0.83, -0.22, 0.75);
+    this.addEllipsoidAtRotated(headGroup, 0.12, 0.31, 0.12, -0.15, 0.98, 0, body, 0, 0, -0.18);
+    this.addEllipsoidAtRotated(headGroup, 0.13, 0.27, 0.12, -0.03, 1.15, 0, body, 0, 0, -0.52);
+    this.addEllipsoidAtRotated(headGroup, 0.24, 0.13, 0.125, 0.25, 1.33, 0, body, 0, 0, -0.1);
+    this.addEllipsoidAtRotated(headGroup, 0.24, 0.07, 0.082, 0.58, 1.2, 0, body, 0, 0, -0.1);
+    this.addEllipsoidAtRotated(headGroup, 0.13, 0.055, 0.095, 0.35, 1.12, 0, body, 0, 0, -0.22);
+    this.addEllipsoidAtRotated(headGroup, 0.055, 0.032, 0.055, 0.76, 1.18, 0, trim, 0, 0, -0.04);
 
-    const depth = 0.27;
-    const geometry = new THREE.ExtrudeGeometry(profile, {
-      depth,
-      bevelEnabled: true,
-      bevelSegments: 5,
-      bevelSize: 0.022,
-      bevelThickness: 0.016,
-      curveSegments: 24,
-    });
-    geometry.translate(0, 0, -depth / 2);
-    const head = new THREE.Mesh(geometry, body);
-    head.castShadow = true;
-    head.receiveShadow = true;
-    headGroup.add(head);
-
-    this.addKnightMane(headGroup, trim);
-    this.addConeAt(headGroup, 0.04, 0.17, 0.12, 1.56, -0.07, trim, -0.16, 0.18, 0.08, 6);
-    this.addConeAt(headGroup, 0.037, 0.16, 0.24, 1.54, 0.07, trim, -0.3, -0.16, 0.08, 6);
-    this.addEllipsoidAt(headGroup, 0.13, 0.055, 0.095, 0.66, 0.98, 0, body);
+    this.addClassicHorseMane(headGroup, trim);
+    this.addConeAt(headGroup, 0.036, 0.2, 0.11, 1.53, 0.07, trim, -0.12, 0.08, 0.1, 8);
+    this.addConeAt(headGroup, 0.032, 0.18, 0.23, 1.51, -0.06, trim, -0.3, -0.08, 0.08, 8);
     const eye = color === "w" ? this.classicBlackMaterial : this.classicWhiteTrimMaterial;
-    this.addSphereAt(headGroup, 0.015, 0.35, 1.3, 0.135, eye);
-    this.addSphereAt(headGroup, 0.015, 0.35, 1.3, -0.135, eye);
-    this.addSphereAt(headGroup, 0.011, 0.73, 0.98, 0.07, eye);
-    this.addSphereAt(headGroup, 0.011, 0.73, 0.98, -0.07, eye);
-    [-0.146, 0.146].forEach((z) => {
-      this.addRoundedBox(headGroup, 0.18, 0.018, 0.012, 0.53, 1.05, z, eye, 0.006, -0.16);
-      this.addRoundedBox(headGroup, 0.12, 0.016, 0.012, 0.27, 1.17, z, eye, 0.006, -0.58);
-      this.addRoundedBox(headGroup, 0.09, 0.014, 0.012, 0.06, 1.34, z, trim, 0.005, -0.5);
+    this.addSphereAt(headGroup, 0.017, 0.35, 1.35, 0.112, eye);
+    this.addSphereAt(headGroup, 0.017, 0.35, 1.35, -0.112, eye);
+    this.addSphereAt(headGroup, 0.011, 0.78, 1.18, 0.044, eye);
+    this.addSphereAt(headGroup, 0.011, 0.78, 1.18, -0.044, eye);
+    [-0.125, 0.125].forEach((z) => {
+      this.addRoundedBox(headGroup, 0.22, 0.016, 0.012, 0.56, 1.18, z, eye, 0.006, -0.08);
+      this.addRoundedBox(headGroup, 0.13, 0.014, 0.012, 0.22, 1.23, z, eye, 0.006, -0.64);
+      this.addRoundedBox(headGroup, 0.1, 0.014, 0.012, 0.08, 1.39, z, trim, 0.005, -0.48);
+    });
+  }
+
+  private addClassicHorseMane(group: THREE.Group, trim: THREE.Material) {
+    const tufts = [
+      { x: -0.12, y: 1.32, rz: -0.48, h: 0.2 },
+      { x: -0.17, y: 1.2, rz: -0.42, h: 0.19 },
+      { x: -0.2, y: 1.08, rz: -0.32, h: 0.18 },
+      { x: -0.21, y: 0.96, rz: -0.22, h: 0.16 },
+    ];
+
+    tufts.forEach((tuft) => {
+      this.addRoundedBox(group, 0.07, tuft.h, 0.16, tuft.x, tuft.y, 0, trim, 0.018, tuft.rz);
     });
   }
 
@@ -2038,6 +2099,28 @@ class ChessAtelier {
   ) {
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 14), material);
     mesh.position.set(x, y, z);
+    mesh.scale.set(radiusX, radiusY, radiusZ);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  private addEllipsoidAtRotated(
+    group: THREE.Group,
+    radiusX: number,
+    radiusY: number,
+    radiusZ: number,
+    x: number,
+    y: number,
+    z: number,
+    material: THREE.Material,
+    rotationX = 0,
+    rotationY = 0,
+    rotationZ = 0,
+  ) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 16), material);
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(rotationX, rotationY, rotationZ);
     mesh.scale.set(radiusX, radiusY, radiusZ);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -2810,6 +2893,9 @@ class ChessAtelier {
     this.pieceStyle = this.pieceStyle === "fantasy" ? "classic" : "fantasy";
     window.localStorage.setItem(pieceStyleStorageKey, this.pieceStyle);
     this.updatePieceStyleButton();
+    if (this.pieceStyle === "classic") {
+      void this.loadClassicKnightAsset();
+    }
     this.rebuildPieces();
     this.rebuildDecorativeStatues();
     this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
