@@ -29,6 +29,7 @@ type SessionScore = {
 
 type PlayerNames = Record<Color, string>;
 type PlayerRole = Color | "spectator" | null;
+type PieceStyle = "fantasy" | "classic";
 
 type LeaderboardRecord = {
   id: string;
@@ -106,6 +107,7 @@ type DebugProbe = {
   movingPieceCount: number;
   movingTrophyCount: number;
   pieceCount: number;
+  pieceStyle: PieceStyle;
   trophyCount: number;
   score: SessionScore;
   leaderboard: LeaderboardState;
@@ -206,6 +208,7 @@ const pieceGlyphs: Record<PieceColor, Record<PieceSymbol, string>> = {
 const squareTopY = 0.075;
 const leaderboardStorageKey = "chessAtelierLeaderboard";
 const soundStorageKey = "chessAtelierSoundEnabled";
+const pieceStyleStorageKey = "chessAtelierPieceStyle";
 const assetBaseUrl = import.meta.env.BASE_URL || "/";
 const modelAssetBaseUrl = assetBaseUrl.replace(/\/$/, "");
 const modelCacheKey = "ru-models-1";
@@ -411,9 +414,15 @@ class ChessAtelier {
   private readonly blackTrimMaterial: THREE.MeshStandardMaterial;
   private readonly whiteClothMaterial: THREE.MeshStandardMaterial;
   private readonly blackClothMaterial: THREE.MeshStandardMaterial;
+  private readonly classicWhiteMaterial: THREE.MeshStandardMaterial;
+  private readonly classicWhiteTrimMaterial: THREE.MeshStandardMaterial;
+  private readonly classicBlackMaterial: THREE.MeshStandardMaterial;
+  private readonly classicBlackTrimMaterial: THREE.MeshStandardMaterial;
+  private readonly feltMaterial: THREE.MeshStandardMaterial;
   private readonly leatherMaterial: THREE.MeshStandardMaterial;
   private readonly goldMaterial: THREE.MeshStandardMaterial;
   private readonly steelMaterial: THREE.MeshStandardMaterial;
+  private pieceStyle: PieceStyle = this.loadPieceStyle();
   private selectedSquare: Square | null = null;
   private legalTargets: Square[] = [];
   private pendingPromotion: PendingPromotion | null = null;
@@ -481,6 +490,7 @@ class ChessAtelier {
   private readonly playerCancelBtn = document.querySelector<HTMLButtonElement>("#playerCancelBtn")!;
   private readonly playerSubmitBtn = document.querySelector<HTMLButtonElement>("#playerSubmitBtn")!;
   private readonly soundBtn = document.querySelector<HTMLButtonElement>("#soundBtn")!;
+  private readonly pieceStyleBtn = document.querySelector<HTMLButtonElement>("#pieceStyleBtn")!;
   private readonly playerDialogCopy = document.querySelector<HTMLParagraphElement>("#playerDialogCopy")!;
   private readonly playerNameInput = document.querySelector<HTMLInputElement>("#playerNameInput")!;
   private readonly promotionDialog = document.querySelector<HTMLDivElement>("#promotionDialog")!;
@@ -524,6 +534,31 @@ class ChessAtelier {
       roughness: 0.66,
       metalness: 0.03,
       side: THREE.DoubleSide,
+    });
+    this.classicWhiteMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd6a65a,
+      roughness: 0.34,
+      metalness: 0.08,
+    });
+    this.classicWhiteTrimMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf0c77a,
+      roughness: 0.28,
+      metalness: 0.12,
+    });
+    this.classicBlackMaterial = new THREE.MeshStandardMaterial({
+      color: 0x14100d,
+      roughness: 0.26,
+      metalness: 0.18,
+    });
+    this.classicBlackTrimMaterial = new THREE.MeshStandardMaterial({
+      color: 0x2f261e,
+      roughness: 0.22,
+      metalness: 0.22,
+    });
+    this.feltMaterial = new THREE.MeshStandardMaterial({
+      color: 0x184a2f,
+      roughness: 0.82,
+      metalness: 0.01,
     });
     this.leatherMaterial = new THREE.MeshStandardMaterial({
       color: 0x3a2418,
@@ -580,6 +615,7 @@ class ChessAtelier {
     this.onResize();
     this.setupCameraControls();
     this.updateSoundButton();
+    this.updatePieceStyleButton();
     this.updateHud();
     this.installDebugApi();
     void this.loadModelAssets();
@@ -1329,7 +1365,213 @@ class ChessAtelier {
     model.position.y += groundY - fitted.min.y;
   }
 
+  private createClassicPiece(type: PieceSymbol, color: Color) {
+    const group = new THREE.Group();
+    const body = color === "w" ? this.classicWhiteMaterial : this.classicBlackMaterial;
+    const trim = color === "w" ? this.classicWhiteTrimMaterial : this.classicBlackTrimMaterial;
+    const accent = color === "w" ? this.classicBlackTrimMaterial : this.classicWhiteTrimMaterial;
+    const scale = type === "p" ? 0.9 : type === "r" ? 0.96 : type === "n" ? 0.98 : type === "b" ? 1 : 1.06;
+    group.scale.setScalar(scale);
+
+    this.addClassicBase(group, body, trim);
+
+    if (type === "p") {
+      this.addClassicPawn(group, body, trim);
+    } else if (type === "r") {
+      this.addClassicRook(group, body, trim);
+    } else if (type === "n") {
+      this.addClassicKnight(group, body, trim, color);
+    } else if (type === "b") {
+      this.addClassicBishop(group, body, trim, accent);
+    } else if (type === "q") {
+      this.addClassicQueen(group, body, trim);
+    } else {
+      this.addClassicKing(group, body, trim);
+    }
+
+    return group;
+  }
+
+  private addClassicBase(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
+    this.addBaseShadow(group, 0.44);
+    this.addCylinder(group, 0.36, 0.38, 0.05, 0.025, this.feltMaterial);
+    this.addCylinder(group, 0.31, 0.38, 0.12, 0.09, body);
+    this.addTorus(group, 0.32, 0.025, 0.155, trim);
+    this.addCylinder(group, 0.24, 0.3, 0.1, 0.21, body);
+    this.addTorus(group, 0.24, 0.018, 0.27, trim);
+  }
+
+  private addClassicLathe(group: THREE.Group, points: Array<[number, number]>, material: THREE.Material, segments = 56) {
+    const geometry = new THREE.LatheGeometry(
+      points.map(([radius, y]) => new THREE.Vector2(radius, y)),
+      segments,
+    );
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  private addClassicPawn(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
+    this.addClassicLathe(
+      group,
+      [
+        [0.14, 0.26],
+        [0.22, 0.33],
+        [0.16, 0.42],
+        [0.12, 0.56],
+        [0.17, 0.63],
+        [0.13, 0.69],
+      ],
+      body,
+    );
+    this.addTorus(group, 0.16, 0.018, 0.65, trim);
+    this.addSphere(group, 0.18, 0.83, body, 1, 1.02, 1);
+  }
+
+  private addClassicRook(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
+    this.addClassicLathe(
+      group,
+      [
+        [0.15, 0.26],
+        [0.23, 0.35],
+        [0.18, 0.54],
+        [0.2, 0.78],
+        [0.28, 0.84],
+        [0.25, 0.96],
+      ],
+      body,
+    );
+    this.addTorus(group, 0.22, 0.018, 0.79, trim);
+    this.addTorus(group, 0.26, 0.02, 0.95, trim);
+    for (let i = 0; i < 6; i += 1) {
+      const angle = (i / 6) * Math.PI * 2;
+      this.addRoundedBox(group, 0.12, 0.15, 0.13, Math.cos(angle) * 0.19, 1.04, Math.sin(angle) * 0.19, trim, 0.025, 0, -angle);
+    }
+  }
+
+  private addClassicKnight(group: THREE.Group, body: THREE.Material, trim: THREE.Material, color: Color) {
+    this.addClassicLathe(
+      group,
+      [
+        [0.14, 0.26],
+        [0.24, 0.36],
+        [0.16, 0.54],
+        [0.2, 0.68],
+        [0.15, 0.82],
+      ],
+      body,
+    );
+    this.addTorus(group, 0.2, 0.018, 0.69, trim);
+    this.addClassicKnightHead(group, body, trim, color);
+  }
+
+  private addClassicBishop(group: THREE.Group, body: THREE.Material, trim: THREE.Material, accent: THREE.Material) {
+    this.addClassicLathe(
+      group,
+      [
+        [0.14, 0.26],
+        [0.24, 0.35],
+        [0.16, 0.55],
+        [0.2, 0.74],
+        [0.17, 0.98],
+        [0.09, 1.16],
+      ],
+      body,
+    );
+    this.addTorus(group, 0.2, 0.018, 0.75, trim);
+    this.addSphere(group, 0.2, 1.06, body, 0.92, 1.18, 0.92);
+    this.addRoundedBox(group, 0.045, 0.34, 0.045, 0, 1.08, -0.17, accent, 0.012, -0.58);
+    this.addSphereAt(group, 0.055, 0, 1.32, 0, trim);
+  }
+
+  private addClassicQueen(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
+    this.addClassicLathe(
+      group,
+      [
+        [0.14, 0.26],
+        [0.27, 0.36],
+        [0.16, 0.62],
+        [0.24, 0.86],
+        [0.2, 1.12],
+        [0.12, 1.34],
+      ],
+      body,
+    );
+    this.addTorus(group, 0.23, 0.02, 0.86, trim);
+    this.addTorus(group, 0.2, 0.02, 1.18, trim);
+    for (let i = 0; i < 8; i += 1) {
+      const angle = (i / 8) * Math.PI * 2;
+      const tall = i % 2 === 0;
+      this.addSphereAt(group, tall ? 0.045 : 0.037, Math.cos(angle) * 0.16, tall ? 1.37 : 1.32, Math.sin(angle) * 0.16, trim);
+    }
+    this.addSphereAt(group, 0.065, 0, 1.42, 0, trim);
+  }
+
+  private addClassicKing(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
+    this.addClassicLathe(
+      group,
+      [
+        [0.14, 0.26],
+        [0.27, 0.36],
+        [0.16, 0.64],
+        [0.23, 0.9],
+        [0.18, 1.18],
+        [0.1, 1.42],
+      ],
+      body,
+    );
+    this.addTorus(group, 0.23, 0.02, 0.88, trim);
+    this.addTorus(group, 0.18, 0.02, 1.22, trim);
+    this.addRoundedBox(group, 0.07, 0.34, 0.055, 0, 1.55, 0, trim, 0.018);
+    this.addRoundedBox(group, 0.25, 0.06, 0.05, 0, 1.62, 0, trim, 0.018);
+  }
+
+  private addClassicKnightHead(group: THREE.Group, body: THREE.Material, trim: THREE.Material, color: Color) {
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0.04, 0.03, 0);
+    headGroup.scale.set(0.84, 0.86, 0.86);
+    group.add(headGroup);
+
+    const profile = new THREE.Shape();
+    profile.moveTo(-0.2, 0.78);
+    profile.bezierCurveTo(-0.28, 0.95, -0.24, 1.15, -0.1, 1.28);
+    profile.bezierCurveTo(0.02, 1.4, 0.08, 1.48, 0.22, 1.52);
+    profile.bezierCurveTo(0.4, 1.54, 0.55, 1.44, 0.58, 1.28);
+    profile.bezierCurveTo(0.64, 1.15, 0.54, 1.04, 0.36, 1.06);
+    profile.bezierCurveTo(0.22, 1.08, 0.14, 0.96, 0.05, 0.78);
+    profile.lineTo(-0.2, 0.78);
+
+    const depth = 0.3;
+    const geometry = new THREE.ExtrudeGeometry(profile, {
+      depth,
+      bevelEnabled: true,
+      bevelSegments: 4,
+      bevelSize: 0.025,
+      bevelThickness: 0.018,
+      curveSegments: 18,
+    });
+    geometry.translate(0, 0, -depth / 2);
+    const head = new THREE.Mesh(geometry, body);
+    head.castShadow = true;
+    head.receiveShadow = true;
+    headGroup.add(head);
+
+    this.addRoundedBox(headGroup, 0.08, 0.2, 0.34, -0.16, 1.16, 0, trim, 0.025, -0.36);
+    this.addRoundedBox(headGroup, 0.07, 0.17, 0.32, -0.18, 1.02, 0, trim, 0.022, -0.22);
+    this.addConeAt(headGroup, 0.038, 0.16, 0.06, 1.52, -0.08, trim, -0.26, 0.16, 0.08, 8);
+    this.addConeAt(headGroup, 0.036, 0.15, 0.2, 1.5, 0.08, trim, -0.34, -0.14, 0.08, 8);
+    this.addEllipsoidAt(headGroup, 0.1, 0.045, 0.08, 0.48, 1.21, 0, body);
+    const eye = color === "w" ? this.classicBlackMaterial : this.classicWhiteTrimMaterial;
+    this.addSphereAt(headGroup, 0.014, 0.33, 1.33, 0.12, eye);
+    this.addSphereAt(headGroup, 0.014, 0.33, 1.33, -0.12, eye);
+  }
+
   private createPiece(type: PieceSymbol, color: Color) {
+    if (this.pieceStyle === "classic") {
+      return this.createClassicPiece(type, color);
+    }
+
     if (this.fullScaleMode) {
       const modelPiece = this.createModelPiece(type, color);
       if (modelPiece) {
@@ -1924,6 +2166,10 @@ class ChessAtelier {
 
     this.roleBadge.addEventListener("click", () => {
       this.showPlayerDialog(false);
+    });
+
+    this.pieceStyleBtn.addEventListener("click", () => {
+      this.togglePieceStyle();
     });
 
     this.soundBtn.addEventListener("click", () => {
@@ -2541,6 +2787,26 @@ class ChessAtelier {
     this.soundBtn.classList.toggle("muted", !this.sound.enabled);
     this.soundBtn.setAttribute("aria-pressed", String(this.sound.enabled));
     this.soundBtn.title = this.sound.enabled ? "Выключить звук" : "Включить звук";
+  }
+
+  private loadPieceStyle(): PieceStyle {
+    return window.localStorage.getItem(pieceStyleStorageKey) === "classic" ? "classic" : "fantasy";
+  }
+
+  private togglePieceStyle() {
+    this.pieceStyle = this.pieceStyle === "fantasy" ? "classic" : "fantasy";
+    window.localStorage.setItem(pieceStyleStorageKey, this.pieceStyle);
+    this.updatePieceStyleButton();
+    this.rebuildPieces();
+    this.rebuildDecorativeStatues();
+    this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
+  }
+
+  private updatePieceStyleButton() {
+    const classic = this.pieceStyle === "classic";
+    this.pieceStyleBtn.textContent = classic ? "Классика" : "Фэнтези";
+    this.pieceStyleBtn.title = classic ? "Сменить на фэнтези-фигуры" : "Сменить на классические фигуры";
+    this.pieceStyleBtn.setAttribute("aria-pressed", String(classic));
   }
 
   private showPlayerDialog(initial: boolean) {
@@ -3268,6 +3534,11 @@ class ChessAtelier {
       material === this.blackTrimMaterial ||
       material === this.whiteClothMaterial ||
       material === this.blackClothMaterial ||
+      material === this.classicWhiteMaterial ||
+      material === this.classicWhiteTrimMaterial ||
+      material === this.classicBlackMaterial ||
+      material === this.classicBlackTrimMaterial ||
+      material === this.feltMaterial ||
       material === this.leatherMaterial ||
       material === this.goldMaterial ||
       material === this.steelMaterial ||
@@ -3327,6 +3598,7 @@ class ChessAtelier {
       movingPieceCount: this.pieceGroup.children.filter((piece) => Boolean(piece.userData.motion)).length,
       movingTrophyCount: this.trophyGroup.children.filter((piece) => Boolean(piece.userData.motion)).length,
       pieceCount: this.pieceGroup.children.length,
+      pieceStyle: this.pieceStyle,
       trophyCount: this.trophyGroup.children.length,
       score: { ...this.sessionScore },
       leaderboard: this.leaderboard,
