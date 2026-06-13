@@ -1512,44 +1512,51 @@ class ChessAtelier {
     this.addClassicLathe(
       group,
       [
-        [0.14, 0.26],
-        [0.27, 0.36],
-        [0.16, 0.64],
-        [0.23, 0.9],
-        [0.18, 1.18],
-        [0.1, 1.42],
+        [0.15, 0.26],
+        [0.28, 0.36],
+        [0.18, 0.58],
+        [0.15, 0.78],
+        [0.25, 0.94],
+        [0.22, 1.08],
+        [0.17, 1.22],
+        [0.11, 1.34],
       ],
       body,
     );
-    this.addTorus(group, 0.23, 0.02, 0.88, trim);
-    this.addTorus(group, 0.18, 0.02, 1.22, trim);
-    this.addRoundedBox(group, 0.07, 0.34, 0.055, 0, 1.55, 0, trim, 0.018);
-    this.addRoundedBox(group, 0.25, 0.06, 0.05, 0, 1.62, 0, trim, 0.018);
+    this.addTorus(group, 0.24, 0.022, 0.92, trim);
+    this.addTorus(group, 0.18, 0.018, 1.15, trim);
+    this.addSphere(group, 0.18, 1.31, body, 0.92, 0.78, 0.92);
+    this.addCylinder(group, 0.11, 0.15, 0.1, 1.38, trim);
+    this.addCylinder(group, 0.055, 0.075, 0.17, 1.49, body);
+    this.addSphereAt(group, 0.055, 0, 1.59, 0, trim);
+    this.addRoundedBox(group, 0.08, 0.34, 0.06, 0, 1.73, 0, trim, 0.018);
+    this.addRoundedBox(group, 0.28, 0.06, 0.052, 0, 1.79, 0, trim, 0.018);
   }
 
   private addClassicKnightHead(group: THREE.Group, body: THREE.Material, trim: THREE.Material, color: Color) {
     const headGroup = new THREE.Group();
-    headGroup.position.set(0.04, 0.03, 0);
-    headGroup.scale.set(0.84, 0.86, 0.86);
+    headGroup.position.set(-0.05, 0.04, 0);
+    headGroup.scale.set(0.74, 0.87, 0.82);
     group.add(headGroup);
 
     const profile = new THREE.Shape();
-    profile.moveTo(-0.2, 0.78);
-    profile.bezierCurveTo(-0.28, 0.95, -0.24, 1.15, -0.1, 1.28);
-    profile.bezierCurveTo(0.02, 1.4, 0.08, 1.48, 0.22, 1.52);
-    profile.bezierCurveTo(0.4, 1.54, 0.55, 1.44, 0.58, 1.28);
-    profile.bezierCurveTo(0.64, 1.15, 0.54, 1.04, 0.36, 1.06);
-    profile.bezierCurveTo(0.22, 1.08, 0.14, 0.96, 0.05, 0.78);
-    profile.lineTo(-0.2, 0.78);
+    profile.moveTo(-0.22, 0.75);
+    profile.bezierCurveTo(-0.32, 0.92, -0.27, 1.15, -0.11, 1.31);
+    profile.bezierCurveTo(0.01, 1.44, 0.16, 1.52, 0.31, 1.5);
+    profile.bezierCurveTo(0.44, 1.48, 0.51, 1.38, 0.51, 1.27);
+    profile.bezierCurveTo(0.67, 1.22, 0.76, 1.1, 0.71, 0.99);
+    profile.bezierCurveTo(0.66, 0.89, 0.49, 0.88, 0.36, 0.95);
+    profile.bezierCurveTo(0.27, 0.99, 0.2, 0.94, 0.16, 0.84);
+    profile.bezierCurveTo(0.06, 0.89, -0.07, 0.83, -0.22, 0.75);
 
-    const depth = 0.3;
+    const depth = 0.27;
     const geometry = new THREE.ExtrudeGeometry(profile, {
       depth,
       bevelEnabled: true,
-      bevelSegments: 4,
-      bevelSize: 0.025,
-      bevelThickness: 0.018,
-      curveSegments: 18,
+      bevelSegments: 5,
+      bevelSize: 0.022,
+      bevelThickness: 0.016,
+      curveSegments: 24,
     });
     geometry.translate(0, 0, -depth / 2);
     const head = new THREE.Mesh(geometry, body);
@@ -1557,14 +1564,20 @@ class ChessAtelier {
     head.receiveShadow = true;
     headGroup.add(head);
 
-    this.addRoundedBox(headGroup, 0.08, 0.2, 0.34, -0.16, 1.16, 0, trim, 0.025, -0.36);
-    this.addRoundedBox(headGroup, 0.07, 0.17, 0.32, -0.18, 1.02, 0, trim, 0.022, -0.22);
-    this.addConeAt(headGroup, 0.038, 0.16, 0.06, 1.52, -0.08, trim, -0.26, 0.16, 0.08, 8);
-    this.addConeAt(headGroup, 0.036, 0.15, 0.2, 1.5, 0.08, trim, -0.34, -0.14, 0.08, 8);
-    this.addEllipsoidAt(headGroup, 0.1, 0.045, 0.08, 0.48, 1.21, 0, body);
+    this.addKnightMane(headGroup, trim);
+    this.addConeAt(headGroup, 0.04, 0.17, 0.12, 1.56, -0.07, trim, -0.16, 0.18, 0.08, 6);
+    this.addConeAt(headGroup, 0.037, 0.16, 0.24, 1.54, 0.07, trim, -0.3, -0.16, 0.08, 6);
+    this.addEllipsoidAt(headGroup, 0.13, 0.055, 0.095, 0.66, 0.98, 0, body);
     const eye = color === "w" ? this.classicBlackMaterial : this.classicWhiteTrimMaterial;
-    this.addSphereAt(headGroup, 0.014, 0.33, 1.33, 0.12, eye);
-    this.addSphereAt(headGroup, 0.014, 0.33, 1.33, -0.12, eye);
+    this.addSphereAt(headGroup, 0.015, 0.35, 1.3, 0.135, eye);
+    this.addSphereAt(headGroup, 0.015, 0.35, 1.3, -0.135, eye);
+    this.addSphereAt(headGroup, 0.011, 0.73, 0.98, 0.07, eye);
+    this.addSphereAt(headGroup, 0.011, 0.73, 0.98, -0.07, eye);
+    [-0.146, 0.146].forEach((z) => {
+      this.addRoundedBox(headGroup, 0.18, 0.018, 0.012, 0.53, 1.05, z, eye, 0.006, -0.16);
+      this.addRoundedBox(headGroup, 0.12, 0.016, 0.012, 0.27, 1.17, z, eye, 0.006, -0.58);
+      this.addRoundedBox(headGroup, 0.09, 0.014, 0.012, 0.06, 1.34, z, trim, 0.005, -0.5);
+    });
   }
 
   private createPiece(type: PieceSymbol, color: Color) {
