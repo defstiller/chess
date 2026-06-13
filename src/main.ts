@@ -573,14 +573,18 @@ class ChessAtelier {
       metalness: 0.12,
     });
     this.classicBlackMaterial = new THREE.MeshStandardMaterial({
-      color: 0x14100d,
-      roughness: 0.26,
-      metalness: 0.18,
+      color: 0x30363d,
+      roughness: 0.38,
+      metalness: 0.08,
+      emissive: 0x101821,
+      emissiveIntensity: 0.18,
     });
     this.classicBlackTrimMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2f261e,
-      roughness: 0.22,
-      metalness: 0.22,
+      color: 0x6f7a84,
+      roughness: 0.32,
+      metalness: 0.14,
+      emissive: 0x121820,
+      emissiveIntensity: 0.12,
     });
     this.feltMaterial = new THREE.MeshStandardMaterial({
       color: 0x184a2f,
@@ -1465,7 +1469,7 @@ class ChessAtelier {
     if (classicGeometry) {
       const fit = classicPieceFits[type];
       this.addBaseShadow(group, Math.max(fit.maxWidth, fit.maxDepth) * 0.58);
-      this.addClassicModelPiece(group, type, body);
+      this.addClassicModelPiece(group, type, color, body);
       return group;
     }
 
@@ -1490,17 +1494,26 @@ class ChessAtelier {
     return group;
   }
 
-  private addClassicModelPiece(group: THREE.Group, type: PieceSymbol, body: THREE.Material) {
+  private addClassicModelPiece(group: THREE.Group, type: PieceSymbol, color: Color, body: THREE.Material) {
     const geometry = this.classicPieceGeometries[type];
     if (!geometry) {
       return;
     }
 
     const mesh = new THREE.Mesh(geometry, body);
+    mesh.rotation.y = this.classicModelPieceRotation(type, color);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.userData.keepGeometry = true;
     group.add(mesh);
+  }
+
+  private classicModelPieceRotation(type: PieceSymbol, color: Color) {
+    if (type !== "n") {
+      return 0;
+    }
+
+    return color === "w" ? Math.PI / 2 : -Math.PI / 2;
   }
 
   private addClassicBase(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
