@@ -371,6 +371,17 @@ function seatForClientKey(clientKey) {
   return null;
 }
 
+function disconnectedSeatForName(name) {
+  const id = playerId(name);
+  if (seats.w && !seats.w.connected && playerId(seats.w.name) === id) {
+    return "w";
+  }
+  if (seats.b && !seats.b.connected && playerId(seats.b.name) === id) {
+    return "b";
+  }
+  return null;
+}
+
 function roleForClient(client) {
   return seatForClientKey(client.clientKey) ?? client.role ?? null;
 }
@@ -447,6 +458,13 @@ function claimSeat(client, name) {
   if (existingRole) {
     seats[existingRole] = { ...seats[existingRole], name, connected: true };
     client.role = existingRole;
+    return;
+  }
+
+  const reusableRole = disconnectedSeatForName(name);
+  if (reusableRole) {
+    seats[reusableRole] = { clientKey: client.clientKey, name, connected: true };
+    client.role = reusableRole;
     return;
   }
 

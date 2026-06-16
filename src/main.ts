@@ -122,6 +122,7 @@ type DebugProbe = {
   lastSentHoverSquare: string | null;
   selectedSquare: string | null;
   remoteHoverSquare: string | null;
+  mobilePanelHidden: boolean;
   soundEnabled: boolean;
   status: string;
   playerNames: PlayerNames;
@@ -216,6 +217,7 @@ const squareTopY = 0.075;
 const leaderboardStorageKey = "chessAtelierLeaderboard";
 const soundStorageKey = "chessAtelierSoundEnabled";
 const pieceStyleStorageKey = "chessAtelierPieceStyle";
+const mobilePanelStorageKey = "chessAtelierMobilePanelHidden";
 const assetBaseUrl = import.meta.env.BASE_URL || "/";
 const modelAssetBaseUrl = assetBaseUrl.replace(/\/$/, "");
 const modelCacheKey = "ru-models-1";
@@ -491,7 +493,9 @@ class ChessAtelier {
   private lastAnimatedMoveCount = 0;
   private lastTrophyCaptureKey: string | null = null;
   private statusFlashTimer: number | null = null;
+  private mobilePanelHidden = window.localStorage.getItem(mobilePanelStorageKey) === "true";
 
+  private readonly appShell = document.querySelector<HTMLElement>("#app-shell")!;
   private readonly statusText = document.querySelector<HTMLSpanElement>("#statusText")!;
   private readonly roleBadge = document.querySelector<HTMLButtonElement>("#roleBadge")!;
   private readonly turnBadge = document.querySelector<HTMLSpanElement>("#turnBadge")!;
@@ -518,6 +522,7 @@ class ChessAtelier {
   private readonly playerSubmitBtn = document.querySelector<HTMLButtonElement>("#playerSubmitBtn")!;
   private readonly soundBtn = document.querySelector<HTMLButtonElement>("#soundBtn")!;
   private readonly pieceStyleBtn = document.querySelector<HTMLButtonElement>("#pieceStyleBtn")!;
+  private readonly panelToggleBtn = document.querySelector<HTMLButtonElement>("#panelToggleBtn")!;
   private readonly playerDialogCopy = document.querySelector<HTMLParagraphElement>("#playerDialogCopy")!;
   private readonly playerNameInput = document.querySelector<HTMLInputElement>("#playerNameInput")!;
   private readonly promotionDialog = document.querySelector<HTMLDivElement>("#promotionDialog")!;
@@ -647,6 +652,7 @@ class ChessAtelier {
     this.setupCameraControls();
     this.updateSoundButton();
     this.updatePieceStyleButton();
+    this.updateMobilePanelToggle();
     this.updateHud();
     this.installDebugApi();
     void this.loadModelAssets();
@@ -2325,6 +2331,10 @@ class ChessAtelier {
       this.togglePieceStyle();
     });
 
+    this.panelToggleBtn.addEventListener("click", () => {
+      this.toggleMobilePanel();
+    });
+
     this.soundBtn.addEventListener("click", () => {
       const enabled = this.sound.toggle();
       this.updateSoundButton();
@@ -2940,6 +2950,19 @@ class ChessAtelier {
     this.soundBtn.classList.toggle("muted", !this.sound.enabled);
     this.soundBtn.setAttribute("aria-pressed", String(this.sound.enabled));
     this.soundBtn.title = this.sound.enabled ? "Выключить звук" : "Включить звук";
+  }
+
+  private toggleMobilePanel() {
+    this.mobilePanelHidden = !this.mobilePanelHidden;
+    window.localStorage.setItem(mobilePanelStorageKey, String(this.mobilePanelHidden));
+    this.updateMobilePanelToggle();
+  }
+
+  private updateMobilePanelToggle() {
+    this.appShell.classList.toggle("match-panel-hidden", this.mobilePanelHidden);
+    this.panelToggleBtn.textContent = "Счет";
+    this.panelToggleBtn.title = this.mobilePanelHidden ? "Показать счет" : "Скрыть счет";
+    this.panelToggleBtn.setAttribute("aria-pressed", String(!this.mobilePanelHidden));
   }
 
   private loadPieceStyle(): PieceStyle {
@@ -3768,6 +3791,7 @@ class ChessAtelier {
       lastSentHoverSquare: this.lastSentHoverSquare,
       selectedSquare: this.selectedSquare,
       remoteHoverSquare: this.remoteHoverSquare,
+      mobilePanelHidden: this.mobilePanelHidden,
       soundEnabled: this.sound.enabled,
       status: this.statusText.textContent ?? "",
       playerNames: { ...this.playerNames },
