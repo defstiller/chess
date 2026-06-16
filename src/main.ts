@@ -31,6 +31,7 @@ type SessionScore = {
 type PlayerNames = Record<Color, string>;
 type PlayerRole = Color | "spectator" | null;
 type PieceStyle = "fantasy" | "classic";
+type CameraLayout = "desktop" | "phone-landscape" | "phone-portrait";
 
 type LeaderboardRecord = {
   id: string;
@@ -99,6 +100,9 @@ type DebugProbe = {
   camera: {
     freeCamera: boolean;
     fullScale: boolean;
+    aspect: number;
+    fov: number;
+    layout: CameraLayout | null;
     position: [number, number, number];
     testMode: boolean;
   };
@@ -423,6 +427,9 @@ class ChessAtelier {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly camera: THREE.PerspectiveCamera;
   private cameraControls: OrbitControls | null = null;
+  private cameraLayout: CameraLayout | null = null;
+  private resizeFrame = 0;
+  private resizeSettleTimers: number[] = [];
   private readonly squareMeshes: THREE.Mesh[] = [];
   private readonly pieceMeshes: THREE.Object3D[] = [];
   private readonly boardMaterials: {
@@ -648,7 +655,7 @@ class ChessAtelier {
     this.createCoordinateLabels();
     this.rebuildPieces();
     this.bindEvents();
-    this.onResize();
+    this.onResize(true);
     this.setupCameraControls();
     this.updateSoundButton();
     this.updatePieceStyleButton();
@@ -2268,7 +2275,10 @@ class ChessAtelier {
   }
 
   private bindEvents() {
-    window.addEventListener("resize", () => this.onResize());
+    window.addEventListener("resize", () => this.queueResize());
+    window.addEventListener("orientationchange", () => this.queueResize(true));
+    window.visualViewport?.addEventListener("resize", () => this.queueResize());
+    window.visualViewport?.addEventListener("scroll", () => this.queueResize());
     window.addEventListener("pointerdown", () => void this.sound.unlock(), { once: true, capture: true });
     this.renderer.domElement.addEventListener("pointermove", (event) => this.onPointerMove(event));
     this.renderer.domElement.addEventListener("pointerdown", (event) => this.onPointerDown(event));
@@ -2362,26 +2372,101 @@ class ChessAtelier {
     });
   }
 
-  private onResize() {
-    const width = this.mount.clientWidth;
-    const height = this.mount.clientHeight;
+  private queueResize(forceCameraLayout = false) {
+    if (this.resizeFrame) {
+      window.cancelAnimationFrame(this.resizeFrame);
+    }
+
+    this.resizeFrame = window.requestAnimationFrame(() => {
+      this.resizeFrame = 0;
+      this.onResize(forceCameraLayout);
+    });
+
+    if (!forceCameraLayout) {
+      return;
+    }
+
+    this.resizeSettleTimers.forEach((timer) => window.clearTimeout(timer));
+    this.resizeSettleTimers = [120, 360].map((delay) =>
+      window.setTimeout(() => {
+        this.onResize(true);
+      }, delay),
+    );
+  }
+
+  private onResize(forceCameraLayout = false) {
+    const { width, height } = this.measureSceneSize();
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
-    const small = width < 760;
-    this.boardGroup.position.x = small ? 0 : this.fullScaleMode ? -0.35 : -1.05;
-    if (!this.cameraControls) {
-      if (this.fullScaleMode) {
-        this.camera.position.set(small ? 14 : 12.8, small ? 13.5 : 10.8, small ? 20 : 17.4);
-        this.camera.fov = small ? 54 : 42;
-      } else {
-        this.camera.position.set(small ? 8.4 : 7.35, small ? 10.8 : 9.55, small ? 12.2 : 9.65);
-        this.camera.fov = small ? 48 : 35;
-      }
-      this.camera.lookAt(0, 0, 0);
-    } else {
-      this.cameraControls.target.copy(this.boardGroup.position);
-    }
+    this.applyCameraLayout(this.getCameraLayout(width, height), forceCameraLayout);
     this.camera.updateProjectionMatrix();
+  }
+
+  private measureSceneSize() {
+    const rect = this.mount.getBoundingClientRect();
+    const visualViewport = window.visualViewport;
+    const width = Math.max(1, Math.round(rect.width || this.mount.clientWidth || visualViewport?.width || window.innerWidth));
+    const height = Math.max(
+      1,
+      Math.round(rect.height || this.mount.clientHeight || visualViewport?.height || window.innerHeight),
+    );
+    return { width, height };
+  }
+
+  private getCameraLayout(width: number, height: number): CameraLayout {
+    if (width <= 980 && height <= 520 && width > height) {
+      return "phone-landscape";
+    }
+
+    if (width < 760) {
+      return "phone-portrait";
+    }
+
+    return "desktop";
+  }
+
+  private applyCameraLayout(layout: CameraLayout, forceCameraLayout: boolean) {
+    const layoutChanged = this.cameraLayout !== layout;
+    this.cameraLayout = layout;
+    this.boardGroup.position.x = layout === "phone-portrait" ? 0 : this.fullScaleMode ? -0.35 : -1.05;
+
+    const shouldResetCamera = forceCameraLayout || layoutChanged || !this.cameraControls;
+    if (shouldResetCamera) {
+      const preset = this.getCameraPreset(layout);
+      this.camera.position.set(preset.x, preset.y, preset.z);
+      this.camera.fov = preset.fov;
+      this.camera.lookAt(this.boardGroup.position);
+    }
+
+    if (this.cameraControls) {
+      this.cameraControls.target.copy(this.boardGroup.position);
+      this.cameraControls.update();
+    }
+  }
+
+  private getCameraPreset(layout: CameraLayout) {
+    if (this.fullScaleMode) {
+      if (layout === "phone-portrait") {
+        return { x: 15.8, y: 15.4, z: 23.4, fov: 46 };
+      }
+
+      if (layout === "phone-landscape") {
+        return { x: 13.6, y: 10.8, z: 19, fov: 39 };
+      }
+
+      return { x: 12.8, y: 10.8, z: 17.4, fov: 42 };
+    }
+
+    if (layout === "phone-portrait") {
+      return { x: 9.6, y: 11.6, z: 14.2, fov: 44 };
+    }
+
+    if (layout === "phone-landscape") {
+      return { x: 7.8, y: 9.4, z: 10.8, fov: 34 };
+    }
+
+    return { x: 7.35, y: 9.55, z: 9.65, fov: 35 };
   }
 
   private onPointerMove(event: PointerEvent) {
@@ -3768,6 +3853,9 @@ class ChessAtelier {
       camera: {
         freeCamera: Boolean(this.cameraControls),
         fullScale: this.fullScaleMode,
+        aspect: this.camera.aspect,
+        fov: this.camera.fov,
+        layout: this.cameraLayout,
         position: [this.camera.position.x, this.camera.position.y, this.camera.position.z],
         testMode: this.cameraTestMode,
       },

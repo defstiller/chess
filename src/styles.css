@@ -30,6 +30,15 @@ body,
   margin: 0;
 }
 
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+}
+
 body {
   overflow: hidden;
   color: var(--ink);
@@ -80,7 +89,16 @@ button:focus-visible {
 #scene {
   position: fixed;
   inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
   touch-action: none;
+}
+
+@supports (height: 100dvh) {
+  #scene {
+    height: 100dvh;
+  }
 }
 
 #scene canvas {
@@ -714,8 +732,15 @@ h1 {
   }
 
   .control-strip {
+    justify-content: flex-start;
     gap: 4px;
+    overflow-x: auto;
     padding: 6px;
+    scrollbar-width: none;
+  }
+
+  .control-strip::-webkit-scrollbar {
+    display: none;
   }
 
   .turn-cluster {
@@ -732,10 +757,10 @@ h1 {
   }
 
   .control-strip button {
-    flex: 1;
+    flex: 0 0 auto;
     min-width: 0;
     min-height: 34px;
-    padding: 0 4px;
+    padding: 0 10px;
     font-size: 0.78rem;
   }
 
