@@ -1526,7 +1526,7 @@ class ChessAtelier {
       return 0;
     }
 
-    return color === "w" ? Math.PI / 2 : -Math.PI / 2;
+    return color === "w" ? -Math.PI / 2 : Math.PI / 2;
   }
 
   private addClassicBase(group: THREE.Group, body: THREE.Material, trim: THREE.Material) {
