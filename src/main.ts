@@ -5,6 +5,16 @@ import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeom
 import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
+import {
+  applyCheckersMove,
+  createInitialCheckersState,
+  deserializeCheckersState,
+  getCheckersPiece,
+  getCheckersResult,
+  getLegalCheckersMoves,
+  type CheckersMove,
+  type CheckersState,
+} from "./checkers";
 import "./styles.css";
 
 type PromotionPiece = "q" | "r" | "b" | "n";
@@ -20,6 +30,11 @@ type Captures = {
   black: PieceSymbol[];
 };
 
+type CheckersCaptures = {
+  white: CheckersMove[];
+  black: CheckersMove[];
+};
+
 type ScoreResult = "white" | "black" | "draw";
 
 type SessionScore = {
@@ -31,6 +46,7 @@ type SessionScore = {
 type PlayerNames = Record<Color, string>;
 type PlayerRole = Color | "spectator" | null;
 type PieceStyle = "fantasy" | "classic";
+type GameMode = "chess" | "checkers";
 type CameraLayout = "desktop" | "phone-landscape" | "phone-portrait";
 
 type LeaderboardRecord = {
@@ -71,11 +87,13 @@ type ServerStateMessage = {
   leaderboard?: LeaderboardState;
   game: {
     id?: string;
+    mode?: GameMode;
     fen: string;
+    checkers?: CheckersState;
     turn: Color;
     gameOver: boolean;
   };
-  history: Move[];
+  history: Array<Move | CheckersMove>;
   seats: {
     w: { name: string; connected: boolean } | null;
     b: { name: string; connected: boolean } | null;
@@ -107,6 +125,7 @@ type DebugProbe = {
     testMode: boolean;
   };
   fen: string;
+  gameMode: GameMode;
   frame: number;
   nonTransparentSamples: number;
   movingPieceCount: number;
@@ -160,7 +179,8 @@ type CaptureTrophy = {
   by: Color;
   color: Color;
   key: string;
-  piece: PieceSymbol;
+  piece: PieceSymbol | "checker";
+  checkerKing?: boolean;
   square: Square;
 };
 
@@ -221,6 +241,7 @@ const squareTopY = 0.075;
 const leaderboardStorageKey = "chessAtelierLeaderboard";
 const soundStorageKey = "chessAtelierSoundEnabled";
 const pieceStyleStorageKey = "chessAtelierPieceStyle";
+const gameModeStorageKey = "chessAtelierGameMode";
 const mobilePanelStorageKey = "chessAtelierMobilePanelHidden";
 const assetBaseUrl = import.meta.env.BASE_URL || "/";
 const modelAssetBaseUrl = assetBaseUrl.replace(/\/$/, "");
@@ -411,6 +432,7 @@ class ChessAtelier {
   private readonly cameraTestMode =
     window.location.pathname.startsWith("/camera-test") || this.routeParams.get("mode") === "camera";
   private readonly game = new Chess();
+  private checkers: CheckersState = createInitialCheckersState();
   private readonly mount: HTMLElement;
   private readonly scene = new THREE.Scene();
   private readonly boardGroup = new THREE.Group();
@@ -456,6 +478,7 @@ class ChessAtelier {
   private readonly leatherMaterial: THREE.MeshStandardMaterial;
   private readonly goldMaterial: THREE.MeshStandardMaterial;
   private readonly steelMaterial: THREE.MeshStandardMaterial;
+  private gameMode: GameMode = this.loadGameMode();
   private pieceStyle: PieceStyle = this.loadPieceStyle();
   private selectedSquare: Square | null = null;
   private legalTargets: Square[] = [];
@@ -483,7 +506,7 @@ class ChessAtelier {
   private modelAssets: Partial<Record<PieceSymbol, ModelAsset>> = {};
   private classicPieceGeometries: Partial<Record<PieceSymbol, THREE.BufferGeometry>> = {};
   private loadingClassicPieces = false;
-  private serverHistory: Move[] | null = null;
+  private serverHistory: Array<Move | CheckersMove> | null = null;
   private displayName = window.localStorage.getItem("chessAtelierDisplayName") ?? "";
   private readonly localMatchId = `${this.clientKey}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
   private localGameCounter = 1;
@@ -528,6 +551,7 @@ class ChessAtelier {
   private readonly playerCancelBtn = document.querySelector<HTMLButtonElement>("#playerCancelBtn")!;
   private readonly playerSubmitBtn = document.querySelector<HTMLButtonElement>("#playerSubmitBtn")!;
   private readonly soundBtn = document.querySelector<HTMLButtonElement>("#soundBtn")!;
+  private readonly gameModeBtn = document.querySelector<HTMLButtonElement>("#gameModeBtn")!;
   private readonly pieceStyleBtn = document.querySelector<HTMLButtonElement>("#pieceStyleBtn")!;
   private readonly panelToggleBtn = document.querySelector<HTMLButtonElement>("#panelToggleBtn")!;
   private readonly playerDialogCopy = document.querySelector<HTMLParagraphElement>("#playerDialogCopy")!;
@@ -658,6 +682,7 @@ class ChessAtelier {
     this.onResize(true);
     this.setupCameraControls();
     this.updateSoundButton();
+    this.updateGameModeButton();
     this.updatePieceStyleButton();
     this.updateMobilePanelToggle();
     this.updateHud();
@@ -1226,12 +1251,19 @@ class ChessAtelier {
     for (let rank = 0; rank < 8; rank += 1) {
       for (let file = 0; file < 8; file += 1) {
         const square = `${files[file]}${ranks[rank]}` as Square;
-        const piece = this.game.get(square);
-        if (!piece) {
+        const group =
+          this.gameMode === "checkers"
+            ? (() => {
+                const piece = getCheckersPiece(this.checkers, square);
+                return piece ? this.createCheckersPiece(piece.color, piece.king) : null;
+              })()
+            : (() => {
+                const piece = this.game.get(square);
+                return piece ? this.createPiece(piece.type, piece.color) : null;
+              })();
+        if (!group) {
           continue;
         }
-
-        const group = this.createPiece(piece.type, piece.color);
         const position = this.squareToLocal(square);
         group.position.set(position.x, squareTopY, position.z);
         if (animation && square === animation.to) {
@@ -1288,7 +1320,7 @@ class ChessAtelier {
     if (loadedEntries.some(Boolean)) {
       this.rebuildPieces();
       this.rebuildDecorativeStatues();
-      this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
+      this.renderCaptures(this.activeHistory());
     }
   }
 
@@ -1325,7 +1357,7 @@ class ChessAtelier {
       if (loadedEntries.some(Boolean) && this.pieceStyle === "classic") {
         this.rebuildPieces();
         this.rebuildDecorativeStatues();
-        this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
+        this.renderCaptures(this.activeHistory());
       }
     } finally {
       this.loadingClassicPieces = false;
@@ -1785,6 +1817,32 @@ class ChessAtelier {
       this.addRoundedBox(group, 0.08, 0.4, 0.08, 0, 1.09, 0, trim, 0.025);
       this.addRoundedBox(group, 0.31, 0.075, 0.075, 0, 1.18, 0, trim, 0.025);
       }
+    }
+
+    return group;
+  }
+
+  private createCheckersPiece(color: Color, king: boolean) {
+    const group = new THREE.Group();
+    const isWhite = color === "w";
+    const body = isWhite ? this.classicWhiteMaterial : this.classicBlackMaterial;
+    const trim = isWhite ? this.classicWhiteTrimMaterial : this.classicBlackTrimMaterial;
+    const accent = isWhite ? this.goldMaterial : this.blackTrimMaterial;
+    const scale = this.fullScaleMode ? 1.08 : 0.96;
+    group.scale.setScalar(scale);
+
+    this.addBaseShadow(group, 0.44);
+    this.addCylinder(group, 0.4, 0.43, 0.12, 0.06, body);
+    this.addTorus(group, 0.34, 0.024, 0.13, trim);
+    this.addCylinder(group, 0.35, 0.39, 0.1, 0.18, body);
+    this.addTorus(group, 0.29, 0.018, 0.235, trim);
+    this.addCylinder(group, 0.27, 0.31, 0.04, 0.28, trim);
+
+    if (king) {
+      this.addCylinder(group, 0.32, 0.36, 0.1, 0.38, body);
+      this.addTorus(group, 0.27, 0.019, 0.435, trim);
+      this.addOctahedron(group, 0.11, 0, 0.54, 0, accent, 1, 0.72, 1);
+      this.addRoundedBox(group, 0.19, 0.035, 0.04, 0, 0.56, 0, accent, 0.01);
     }
 
     return group;
@@ -2298,7 +2356,7 @@ class ChessAtelier {
     });
 
     document.querySelector<HTMLButtonElement>("#newGameBtn")!.addEventListener("click", () => {
-      if (!this.game.isGameOver()) {
+      if (!this.activeGameOver()) {
         this.flashStatus("Новая партия доступна после завершения.", "warning");
         return;
       }
@@ -2306,7 +2364,7 @@ class ChessAtelier {
         this.sendToServer({ type: "newGame" });
         return;
       }
-      this.game.reset();
+      this.resetActivePosition();
       this.selectedSquare = null;
       this.lastMove = null;
       this.recordedResult = null;
@@ -2335,6 +2393,10 @@ class ChessAtelier {
 
     this.roleBadge.addEventListener("click", () => {
       this.showPlayerDialog(false);
+    });
+
+    this.gameModeBtn.addEventListener("click", () => {
+      this.toggleGameMode();
     });
 
     this.pieceStyleBtn.addEventListener("click", () => {
@@ -2509,7 +2571,7 @@ class ChessAtelier {
     if (!square || (this.role !== "w" && this.role !== "b")) {
       return null;
     }
-    const piece = this.game.get(square);
+    const piece = this.activePieceAt(square);
     return piece?.color === this.role ? square : null;
   }
 
@@ -2601,8 +2663,8 @@ class ChessAtelier {
   }
 
   private handleSquare(square: Square) {
-    const piece = this.game.get(square);
-    const turn = this.game.turn();
+    const piece = this.activePieceAt(square);
+    const turn = this.activeTurn();
 
     if (!this.canInteractWithBoard()) {
       this.flashStatus(this.boardBlockedMessage(), "warning");
@@ -2619,7 +2681,7 @@ class ChessAtelier {
       return;
     }
 
-    if (this.game.isGameOver()) {
+    if (this.activeGameOver()) {
       this.flashStatus("Партия окончена", "warning");
       return;
     }
@@ -2649,8 +2711,9 @@ class ChessAtelier {
       return;
     }
 
-    const movingPiece = this.game.get(this.selectedSquare);
+    const movingPiece = this.gameMode === "chess" ? this.game.get(this.selectedSquare) : null;
     const promotes =
+      this.gameMode === "chess" &&
       movingPiece?.type === "p" &&
       ((movingPiece.color === "w" && square.endsWith("8")) || (movingPiece.color === "b" && square.endsWith("1")));
 
@@ -2665,7 +2728,7 @@ class ChessAtelier {
 
   private selectSquare(square: Square) {
     this.selectedSquare = square;
-    this.legalTargets = [...new Set(this.game.moves({ square, verbose: true }).map((move) => move.to))];
+    this.legalTargets = this.activeLegalTargets(square);
     this.updateHighlights();
   }
 
@@ -2712,6 +2775,26 @@ class ChessAtelier {
     }
 
     try {
+      if (this.gameMode === "checkers") {
+        const result = applyCheckersMove(this.checkers, from, to);
+        if (!result) {
+          this.flashStatus("РќРµРґРѕРїСѓСЃС‚РёРјС‹Р№ С…РѕРґ", "danger");
+          return;
+        }
+
+        this.checkers = result.state;
+        this.lastMove = { from, to };
+        this.selectedSquare = null;
+        this.legalTargets = [];
+        this.pendingPromotion = null;
+        this.hidePromotionDialog();
+        this.rebuildPieces({ from, to, capture: result.move.captures.length > 0 });
+        this.updateHighlights();
+        this.updateHud();
+        this.playMoveSound(result.move);
+        return;
+      }
+
       const move = this.game.move({ from, to, promotion });
       if (!move) {
         this.flashStatus("Недопустимый ход", "danger");
@@ -2886,6 +2969,9 @@ class ChessAtelier {
     this.serverConnection = "online";
     this.stateRevision = state.stateRevision ?? this.stateRevision;
     this.role = state.role;
+    this.gameMode = state.game.mode === "checkers" ? "checkers" : "chess";
+    window.localStorage.setItem(gameModeStorageKey, this.gameMode);
+    this.updateGameModeButton();
     this.serverHistory = state.history;
     this.sessionScore.white = state.score.white;
     this.sessionScore.black = state.score.black;
@@ -2901,7 +2987,11 @@ class ChessAtelier {
     }
 
     const moveAnimation = this.getServerMoveAnimation(state);
-    this.game.load(state.game.fen);
+    if (this.gameMode === "checkers") {
+      this.checkers = deserializeCheckersState(state.game.checkers);
+    } else {
+      this.game.load(state.game.fen);
+    }
     this.playServerStateSound(state);
     this.selectedSquare = null;
     this.legalTargets = [];
@@ -2976,10 +3066,25 @@ class ChessAtelier {
     const move = moveCount > this.lastAnimatedMoveCount ? state.history[moveCount - 1] : null;
     this.lastAnimatedMoveCount = moveCount;
 
-    return move ? { from: move.from, to: move.to, capture: Boolean(move.captured) } : null;
+    return move ? { from: move.from, to: move.to, capture: this.moveHasCapture(move) } : null;
   }
 
-  private playMoveSound(move: Move) {
+  private moveHasCapture(move: Move | CheckersMove) {
+    return "captures" in move ? move.captures.length > 0 : Boolean(move.captured);
+  }
+
+  private playMoveSound(move: Move | CheckersMove) {
+    if (this.gameMode === "checkers") {
+      if (this.checkers.winner) {
+        this.sound.play("gameOver");
+      } else if ("captures" in move && move.captures.length > 0) {
+        this.sound.play("capture");
+      } else {
+        this.sound.play("move");
+      }
+      return;
+    }
+
     if (this.game.isCheckmate()) {
       this.sound.play("mate");
     } else if (this.game.isGameOver()) {
@@ -2998,7 +3103,7 @@ class ChessAtelier {
       ? this.online && (this.role === "w" || this.role === "b")
       : !this.online || this.role === "w" || this.role === "b";
     document.querySelector<HTMLButtonElement>("#newGameBtn")!.disabled =
-      !canPlay || this.awaitingMoveAck || !this.game.isGameOver();
+      !canPlay || this.awaitingMoveAck || !this.activeGameOver();
 
     if (!this.online) {
       this.roleBadge.textContent = "Локально";
@@ -3018,16 +3123,17 @@ class ChessAtelier {
     }
     this.roleBadge.title =
       this.role === "w" || this.role === "b" ? "Изменить имя игрока" : "Войти в партию";
-    const activeTurn = this.game.turn();
-    const myTurn = this.online && (this.role === "w" || this.role === "b") && this.role === activeTurn && !this.game.isGameOver();
+    const activeTurn = this.activeTurn();
+    const myTurn = this.online && (this.role === "w" || this.role === "b") && this.role === activeTurn && !this.activeGameOver();
     const theirTurn =
-      this.online && (this.role === "w" || this.role === "b") && this.role !== activeTurn && !this.game.isGameOver();
+      this.online && (this.role === "w" || this.role === "b") && this.role !== activeTurn && !this.activeGameOver();
     this.turnCluster.classList.toggle("my-turn", myTurn && !this.awaitingMoveAck);
     this.turnCluster.classList.toggle("their-turn", theirTurn);
     this.turnCluster.classList.toggle("waiting-server", this.serverExpected && (!this.online || this.awaitingMoveAck));
     document.body.classList.toggle("my-turn-active", myTurn && !this.awaitingMoveAck);
     this.updateLeaderboardSyncLabel();
     this.updateSoundButton();
+    this.updateGameModeButton();
   }
 
   private updateSoundButton() {
@@ -3050,6 +3156,93 @@ class ChessAtelier {
     this.panelToggleBtn.setAttribute("aria-pressed", String(!this.mobilePanelHidden));
   }
 
+  private loadGameMode(): GameMode {
+    return window.localStorage.getItem(gameModeStorageKey) === "checkers" ? "checkers" : "chess";
+  }
+
+  private toggleGameMode() {
+    const nextMode: GameMode = this.gameMode === "chess" ? "checkers" : "chess";
+    if (this.serverExpected) {
+      if (!this.online) {
+        this.flashStatus("Ждем соединение с сервером", "warning");
+        return;
+      }
+      if (this.role !== "w" && this.role !== "b") {
+        this.flashStatus("Только игроки могут менять игру", "warning");
+        return;
+      }
+      this.sendToServer({ type: "setMode", mode: nextMode });
+      return;
+    }
+
+    this.setLocalGameMode(nextMode, true);
+    this.sound.play("start");
+  }
+
+  private setLocalGameMode(mode: GameMode, resetPosition: boolean) {
+    this.gameMode = mode;
+    window.localStorage.setItem(gameModeStorageKey, mode);
+    this.updateGameModeButton();
+    this.serverHistory = null;
+    this.selectedSquare = null;
+    this.legalTargets = [];
+    this.pendingPromotion = null;
+    this.lastMove = null;
+    this.lastTrophyCaptureKey = null;
+    this.hidePromotionDialog();
+    if (resetPosition) {
+      this.resetActivePosition();
+      this.recordedResult = null;
+      this.advanceLocalGameId();
+      this.lastAnimatedGameId = null;
+      this.lastAnimatedMoveCount = 0;
+      this.lastSoundedGameId = null;
+      this.lastSoundedMoveCount = 0;
+    }
+    this.rebuildPieces();
+    this.updateHighlights();
+    this.updateHud();
+    this.updateControls();
+  }
+
+  private resetActivePosition() {
+    if (this.gameMode === "checkers") {
+      this.checkers = createInitialCheckersState();
+      return;
+    }
+    this.game.reset();
+  }
+
+  private activeTurn() {
+    return this.gameMode === "checkers" ? this.checkers.turn : this.game.turn();
+  }
+
+  private activeGameOver() {
+    return this.gameMode === "checkers" ? Boolean(this.checkers.winner) : this.game.isGameOver();
+  }
+
+  private activeHistory() {
+    return this.serverHistory ?? (this.gameMode === "checkers" ? this.checkers.history : (this.game.history({ verbose: true }) as Move[]));
+  }
+
+  private activePieceAt(square: Square) {
+    return this.gameMode === "checkers" ? getCheckersPiece(this.checkers, square) : this.game.get(square);
+  }
+
+  private activeLegalTargets(square: Square) {
+    if (this.gameMode === "checkers") {
+      return [...new Set(getLegalCheckersMoves(this.checkers, square).map((move) => move.to))];
+    }
+    return [...new Set(this.game.moves({ square, verbose: true }).map((move) => move.to))];
+  }
+
+  private updateGameModeButton() {
+    const checkers = this.gameMode === "checkers";
+    this.gameModeBtn.textContent = checkers ? "Шашки" : "Шахматы";
+    this.gameModeBtn.title = checkers ? "Сменить на шахматы" : "Сменить на шашки";
+    this.gameModeBtn.setAttribute("aria-pressed", String(checkers));
+  }
+
   private loadPieceStyle(): PieceStyle {
     return window.localStorage.getItem(pieceStyleStorageKey) === "classic" ? "classic" : "fantasy";
   }
@@ -3063,7 +3256,7 @@ class ChessAtelier {
     }
     this.rebuildPieces();
     this.rebuildDecorativeStatues();
-    this.renderCaptures(this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]));
+    this.renderCaptures(this.activeHistory());
   }
 
   private updatePieceStyleButton() {
@@ -3436,7 +3629,7 @@ class ChessAtelier {
     }
 
     this.legalTargets.forEach((square) => {
-      const occupied = this.game.get(square);
+      const occupied = this.activePieceAt(square);
       const material = occupied ? this.boardMaterials.captureMarker : this.boardMaterials.marker;
       const geometry = occupied ? new THREE.RingGeometry(0.27, 0.42, 40) : new THREE.CircleGeometry(0.16, 40);
       const marker = new THREE.Mesh(geometry, material.clone());
@@ -3458,8 +3651,8 @@ class ChessAtelier {
   }
 
   private updateHud() {
-    const turn = this.game.turn();
-    const history = this.serverHistory ?? (this.game.history({ verbose: true }) as Move[]);
+    const turn = this.activeTurn();
+    const history = this.activeHistory();
     const result = this.getGameResult();
 
     if (!this.online && result && !this.recordedResult) {
@@ -3481,17 +3674,20 @@ class ChessAtelier {
     } else if (this.awaitingMoveAck) {
       this.statusText.textContent = "Сохраняем ход на сервере...";
       this.statusText.classList.add("warning");
-    } else if (this.game.isCheckmate()) {
+    } else if (this.gameMode === "checkers" && this.checkers.winner) {
+      this.statusText.textContent = `Победа: ${this.playerName(this.checkers.winner)}`;
+      this.statusText.classList.add("danger");
+    } else if (this.gameMode === "chess" && this.game.isCheckmate()) {
       const winner = turn === "w" ? "b" : "w";
       this.statusText.textContent = `Мат. Победитель: ${this.playerName(winner)}`;
       this.statusText.classList.add("danger");
-    } else if (this.game.isStalemate()) {
+    } else if (this.gameMode === "chess" && this.game.isStalemate()) {
       this.statusText.textContent = "Ничья: пат";
       this.statusText.classList.add("warning");
-    } else if (this.game.isDraw()) {
+    } else if (this.gameMode === "chess" && this.game.isDraw()) {
       this.statusText.textContent = "Ничья";
       this.statusText.classList.add("warning");
-    } else if (this.game.inCheck()) {
+    } else if (this.gameMode === "chess" && this.game.inCheck()) {
       this.statusText.textContent = this.visibleTurnStatus(turn, " - шах");
       this.statusText.classList.add("warning");
     } else {
@@ -3511,6 +3707,10 @@ class ChessAtelier {
   }
 
   private getGameResult(): ScoreResult | null {
+    if (this.gameMode === "checkers") {
+      return getCheckersResult(this.checkers);
+    }
+
     if (this.game.isCheckmate()) {
       return this.game.turn() === "w" ? "black" : "white";
     }
@@ -3530,7 +3730,7 @@ class ChessAtelier {
     }
   }
 
-  private renderMoveList(history: Move[]) {
+  private renderMoveList(history: Array<Move | CheckersMove>) {
     this.moveList.replaceChildren();
     for (let index = 0; index < history.length; index += 2) {
       const row = document.createElement("li");
@@ -3567,13 +3767,20 @@ class ChessAtelier {
       .replace(/=Q/g, "=Ф")
       .replace(/=R/g, "=Л")
       .replace(/=B/g, "=Сл")
-      .replace(/=N/g, "=К");
+      .replace(/=N/g, "=К")
+      .replace(/=K/g, "=Д");
   }
 
-  private renderCaptures(history: Move[]) {
-    const captures = this.getCaptures(history);
-    this.whiteCaptures.textContent = captures.white.map((piece) => pieceGlyphs.b[piece]).join(" ");
-    this.blackCaptures.textContent = captures.black.map((piece) => pieceGlyphs.w[piece]).join(" ");
+  private renderCaptures(history: Array<Move | CheckersMove>) {
+    if (this.gameMode === "checkers") {
+      const captures = this.getCheckersCaptures(history);
+      this.whiteCaptures.textContent = captures.white.map(() => "●").join(" ");
+      this.blackCaptures.textContent = captures.black.map(() => "○").join(" ");
+    } else {
+      const captures = this.getCaptures(history as Move[]);
+      this.whiteCaptures.textContent = captures.white.map((piece) => pieceGlyphs.b[piece]).join(" ");
+      this.blackCaptures.textContent = captures.black.map((piece) => pieceGlyphs.w[piece]).join(" ");
+    }
 
     const trophies = this.getCaptureTrophies(history);
     const latest = trophies[trophies.length - 1];
@@ -3600,9 +3807,35 @@ class ChessAtelier {
     return captures;
   }
 
-  private getCaptureTrophies(history: Move[]) {
+  private getCheckersCaptures(history: Array<Move | CheckersMove>) {
+    const captures: CheckersCaptures = { white: [], black: [] };
+    history.forEach((move) => {
+      if (!("captures" in move) || move.captures.length === 0) {
+        return;
+      }
+      const target = move.color === "w" ? captures.white : captures.black;
+      move.captures.forEach(() => target.push(move));
+    });
+    return captures;
+  }
+
+  private getCaptureTrophies(history: Array<Move | CheckersMove>) {
     const trophies: CaptureTrophy[] = [];
     history.forEach((move, index) => {
+      if ("captures" in move) {
+        move.captures.forEach((square, captureIndex) => {
+          trophies.push({
+            by: move.color,
+            color: move.color === "w" ? "b" : "w",
+            key: `${index}:${captureIndex}:${move.from}:${move.to}:${square}`,
+            piece: "checker",
+            checkerKing: false,
+            square,
+          });
+        });
+        return;
+      }
+
       if (!move.captured) {
         return;
       }
@@ -3626,8 +3859,9 @@ class ChessAtelier {
       const index = counts[trophy.by];
       counts[trophy.by] += 1;
       const target = this.trophyPosition(trophy.by, index);
-      const group = this.createPiece(trophy.piece, trophy.color);
-      group.scale.multiplyScalar(this.fullScaleMode ? 0.36 : 0.42);
+      const group =
+        trophy.piece === "checker" ? this.createCheckersPiece(trophy.color, Boolean(trophy.checkerKing)) : this.createPiece(trophy.piece, trophy.color);
+      group.scale.multiplyScalar(trophy.piece === "checker" ? (this.fullScaleMode ? 0.62 : 0.7) : this.fullScaleMode ? 0.36 : 0.42);
       group.position.copy(target);
       group.rotation.y = trophy.by === "w" ? -0.2 : 0.2;
       group.userData.kind = "trophy";
@@ -3660,10 +3894,15 @@ class ChessAtelier {
     return new THREE.Vector3(x, 0.18, z);
   }
 
-  private renderScoreboard(history: Move[]) {
-    const captures = this.getCaptures(history);
-    const whiteMaterial = captures.white.reduce((score, piece) => score + pieceValues[piece], 0);
-    const blackMaterial = captures.black.reduce((score, piece) => score + pieceValues[piece], 0);
+  private renderScoreboard(history: Array<Move | CheckersMove>) {
+    const captures = this.gameMode === "checkers" ? null : this.getCaptures(history as Move[]);
+    const checkersCaptures = this.gameMode === "checkers" ? this.getCheckersCaptures(history) : null;
+    const whiteMaterial = checkersCaptures
+      ? checkersCaptures.white.length
+      : captures!.white.reduce((score, piece) => score + pieceValues[piece], 0);
+    const blackMaterial = checkersCaptures
+      ? checkersCaptures.black.length
+      : captures!.black.reduce((score, piece) => score + pieceValues[piece], 0);
     const materialDiff = whiteMaterial - blackMaterial;
     const scoreDiff = this.sessionScore.white - this.sessionScore.black;
 
@@ -3674,8 +3913,9 @@ class ChessAtelier {
     this.blackPlayerName.textContent = this.playerName("b");
     this.whiteCaptureLabel.textContent = this.playerName("w");
     this.blackCaptureLabel.textContent = this.playerName("b");
-    this.whiteMaterial.textContent = `М: ${this.formatSigned(materialDiff)}`;
-    this.blackMaterial.textContent = `М: ${this.formatSigned(-materialDiff)}`;
+    const materialLabel = this.gameMode === "checkers" ? "Ш" : "М";
+    this.whiteMaterial.textContent = `${materialLabel}: ${this.formatSigned(materialDiff)}`;
+    this.blackMaterial.textContent = `${materialLabel}: ${this.formatSigned(-materialDiff)}`;
     this.scoreLead.textContent =
       scoreDiff === 0 ? "Ровный матч" : `${this.playerName(scoreDiff > 0 ? "w" : "b")} +${Math.abs(scoreDiff)}`;
   }
@@ -3710,7 +3950,7 @@ class ChessAtelier {
   }
 
   private turnTone(color: Color) {
-    if (!this.online || this.game.isGameOver()) {
+    if (!this.online || this.activeGameOver()) {
       return "";
     }
     if (this.role === color) {
@@ -3860,6 +4100,7 @@ class ChessAtelier {
         testMode: this.cameraTestMode,
       },
       fen: this.game.fen(),
+      gameMode: this.gameMode,
       frame: this.frame,
       nonTransparentSamples,
       movingPieceCount: this.pieceGroup.children.filter((piece) => Boolean(piece.userData.motion)).length,

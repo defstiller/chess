@@ -6,6 +6,14 @@ import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Chess } from "chess.js";
 import { WebSocketServer } from "ws";
+import {
+  applyCheckersMove,
+  createInitialCheckersState,
+  deserializeCheckersState,
+  getCheckersPiece,
+  getCheckersResult,
+  serializeCheckersState,
+} from "./checkers-engine.mjs";
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url));
 const distDir = join(rootDir, "dist");
@@ -20,6 +28,8 @@ const host = process.env.HOST?.trim();
 const clients = new Map();
 const seats = { w: null, b: null };
 let game = new Chess();
+let gameMode = "chess";
+let checkers = createInitialCheckersState();
 let score = { white: 0, black: 0, draws: 0 };
 let recordedResult = null;
 let nextClientId = 1;
@@ -68,8 +78,14 @@ function nextGameId() {
   currentGameId = `${matchId}:${gameNumber}`;
 }
 
-function resetAll() {
+function resetActiveGame(mode = gameMode) {
+  gameMode = mode === "checkers" ? "checkers" : "chess";
   game = new Chess();
+  checkers = createInitialCheckersState();
+}
+
+function resetAll() {
+  resetActiveGame("chess");
   score = { white: 0, black: 0, draws: 0 };
   recordedResult = null;
   matchId = randomUUID();
@@ -185,6 +201,16 @@ function mergeLeaderboard(incoming) {
 }
 
 function exportedMoves() {
+  if (gameMode === "checkers") {
+    return checkers.history.map((move) => ({
+      from: move.from,
+      to: move.to,
+      path: move.path,
+      captures: move.captures,
+      promotion: move.promotion,
+    }));
+  }
+
   return game.history({ verbose: true }).map((move) => ({
     from: move.from,
     to: move.to,
@@ -204,7 +230,9 @@ function serializedState() {
     matchId,
     gameNumber,
     currentGameId,
+    gameMode,
     fen: game.fen(),
+    checkers: serializeCheckersState(checkers),
     moves: exportedMoves(),
     score,
     recordedResult,
@@ -233,6 +261,13 @@ function markStateChanged() {
 }
 
 function restoreGame(raw) {
+  if (raw?.gameMode === "checkers") {
+    gameMode = "checkers";
+    checkers = deserializeCheckersState(raw.checkers);
+    return;
+  }
+
+  gameMode = "chess";
   const restoredGame = new Chess();
   const moves = Array.isArray(raw?.moves) ? raw.moves : [];
 
@@ -333,6 +368,10 @@ function recordLeaderboardResult(result) {
 }
 
 function resultForCurrentPosition() {
+  if (gameMode === "checkers") {
+    return getCheckersResult(checkers);
+  }
+
   if (game.isCheckmate()) {
     return game.turn() === "w" ? "black" : "white";
   }
@@ -340,6 +379,18 @@ function resultForCurrentPosition() {
     return "draw";
   }
   return null;
+}
+
+function activeTurn() {
+  return gameMode === "checkers" ? checkers.turn : game.turn();
+}
+
+function activeGameOver() {
+  return gameMode === "checkers" ? Boolean(checkers.winner) : game.isGameOver();
+}
+
+function activeHistory() {
+  return gameMode === "checkers" ? checkers.history : game.history({ verbose: true });
 }
 
 function applyScoreResult(result, delta) {
@@ -400,10 +451,12 @@ function publicStateFor(client) {
     },
     game: {
       id: currentGameId,
+      mode: gameMode,
       fen: game.fen(),
       pgn: game.pgn(),
-      turn: game.turn(),
-      gameOver: game.isGameOver(),
+      checkers: serializeCheckersState(checkers),
+      turn: activeTurn(),
+      gameOver: activeGameOver(),
     },
     names: {
       w: seats.w?.name ?? "Ждем белых",
@@ -412,7 +465,7 @@ function publicStateFor(client) {
     score,
     recordedResult,
     leaderboard,
-    history: game.history({ verbose: true }),
+    history: activeHistory(),
   };
 }
 
@@ -438,7 +491,7 @@ function broadcastHover(sourceClient, square) {
 
   let hoverSquare = null;
   if (isBoardSquare(square)) {
-    const piece = game.get(square);
+    const piece = gameMode === "checkers" ? getCheckersPiece(checkers, square) : game.get(square);
     hoverSquare = piece?.color === role ? square : null;
   }
 
@@ -552,16 +605,25 @@ function handleMessage(client, raw) {
 
   if (message.type === "move") {
     const role = roleForClient(client);
-    if (role !== game.turn()) {
+    if (role !== activeTurn()) {
       sendError(client, role === "spectator" ? "Зрители только смотрят." : "Сейчас не ваш ход.");
       return;
     }
-    if (game.isGameOver()) {
+    if (activeGameOver()) {
       sendError(client, "Партия уже окончена.");
       return;
     }
     try {
-      game.move({ from: message.from, to: message.to, promotion: message.promotion });
+      if (gameMode === "checkers") {
+        const result = applyCheckersMove(checkers, message.from, message.to);
+        if (!result) {
+          sendError(client, "РќРµРґРѕРїСѓСЃС‚РёРјС‹Р№ С…РѕРґ.");
+          return;
+        }
+        checkers = result.state;
+      } else {
+        game.move({ from: message.from, to: message.to, promotion: message.promotion });
+      }
       broadcastHover(client, null);
       recordResultIfNeeded();
       markStateChanged();
@@ -569,6 +631,26 @@ function handleMessage(client, raw) {
     } catch {
       sendError(client, "Недопустимый ход.");
     }
+    return;
+  }
+
+  if (message.type === "setMode") {
+    const role = roleForClient(client);
+    const mode = message.mode === "checkers" ? "checkers" : message.mode === "chess" ? "chess" : null;
+    if (role !== "w" && role !== "b") {
+      sendError(client, "Р—СЂРёС‚РµР»Рё С‚РѕР»СЊРєРѕ СЃРјРѕС‚СЂСЏС‚.");
+      return;
+    }
+    if (!mode) {
+      sendError(client, "РќРµРёР·РІРµСЃС‚РЅС‹Р№ СЂРµР¶РёРј.");
+      return;
+    }
+    resetActiveGame(mode);
+    recordedResult = null;
+    nextGameId();
+    broadcastHover(client, null);
+    markStateChanged();
+    broadcast();
     return;
   }
 
@@ -583,11 +665,11 @@ function handleMessage(client, raw) {
       sendError(client, "Зрители только смотрят.");
       return;
     }
-    if (!game.isGameOver()) {
+    if (!activeGameOver()) {
       sendError(client, "Новая партия доступна после завершения текущей.");
       return;
     }
-    game.reset();
+    resetActiveGame(gameMode);
     recordedResult = null;
     nextGameId();
     broadcastHover(client, null);
